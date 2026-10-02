@@ -24,6 +24,7 @@ runner. A completion choice must pass an independent fresh-screen judgment.
 Probability and confidence both default to a 0.9 gate. Every step calls the
 model; the executor opts out of the replay cache.
 
-Text generation, pixels, `waitFor`, and `extract` are outside this executor.
+Text generation, `waitFor`, and `extract` are outside this executor. Pixels are
+opt-in through `vision: true` on vision models (Clef); Jev stays text-only.
 See the [decision models guide](https://e2e.tester.army/docs/decision-models)
 for supported actions, provider setup, policy gates, and the 255-choice limit.
