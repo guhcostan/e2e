@@ -31,9 +31,13 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
     provider: options.provider,
     modelId: options.model,
     ...(options.structured === undefined ? {} : { structured: options.structured }),
+    ...(options.vision === undefined ? {} : { vision: options.vision }),
     async decide(request) {
       if (!options.apiKey) throw new AgentError('MODEL_UNAVAILABLE', 'Set the decision provider API key.');
       request.signal.throwIfAborted();
+      // Text-only transports never receive pixels: Jev has no vision input,
+      // so images leave the process only toward vision endpoints.
+      const images = options.vision === true ? request.images?.filter((image) => typeof image === 'string' && image.startsWith('data:image/')) : undefined;
       let response: Response;
       try {
         response = await transport(endpoint, {
@@ -43,6 +47,7 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
           signal: request.signal,
           body: JSON.stringify({
             model: options.model,
+            ...(images?.length ? { images } : {}),
             state: request.state,
             questions: { decision: { type: 'choice', instructions: request.instructions, criteria: request.criteria } },
           }),
@@ -92,6 +97,7 @@ export function clef(options: ClefOptions): DecisionModel {
     model,
     envelope: 'cloudflare',
     structured: true,
+    vision: true,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }
@@ -108,6 +114,7 @@ export function jev(options: JevOptions): DecisionModel {
     // TypeSafe rounds probabilities to two places (its AI SDK provider
     // declares the same), so a long distribution need not sum to exactly 1.
     probabilityDecimals: 2,
+    vision: false,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }

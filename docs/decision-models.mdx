@@ -154,6 +154,30 @@ provenance enter the report through the executor accounting API. HTTP failures
 use `MODEL_PROVIDER_FAILED`; response bodies and credentials never enter
 error messages. There are no transport retries in this package.
 
+## Vision (Clef only)
+
+The executor is text-only by default: it sends the redacted semantic tree as
+text and never requests pixels. Pass `vision: true` to also attach the masked
+viewport screenshot to each decision request:
+
+```ts title="Executor with vision"
+const executor = decisionExecutor({ model, vision: true });
+```
+
+Screenshots travel as the System One `images` array, alongside the state, as
+embedded PNG data URLs. Only models that declare vision receive them: `clef()`
+does, while `jev()` is text-only and never gets pixels, even with `vision: true`.
+A compatible endpoint receives images only when built with `vision: true`. AI
+SDK evaluation models stay text-only too: the evaluation call has no image
+input, so the executor never requests pixels for them.
+
+Pixels degrade instead of failing the step. When the engine withholds them, or
+after a secret fill taints the viewport, the step decides from semantic text
+alone. Calls that actually carry a screenshot cost more and run longer than
+text-only calls; withheld or tainted viewports send none. Point actions
+stay unimplemented: pixels inform which node choice to pick, they add no new
+action vocabulary.
+
 ## Compatible endpoints
 
 `systemOne` accepts the full evaluation URL. It sends one `choice` question
@@ -258,7 +282,7 @@ the direct transport.
 
 ## Benchmark: LLM agent vs decision model
 
-The same todo flow runs under two configs against the same app and engine:
+The same todo flow runs under each config against the same app and engine:
 `parametrized todo flow` in `apps/testbed/tests-bench/todo-flow.e2e.ts`
 (add "Buy milk" and "Walk the dog", mark "Buy milk" done, values as
 params, all assertions deterministic). One side uses the default agent
@@ -268,8 +292,13 @@ executor with an LLM, the other uses `decisionExecutor`:
   served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
 - `apps/testbed/e2e.bench-clef.config.ts`: `decisionExecutor` with `clef()`
   from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`; Clef-flash by
-  default, `BENCH_CLEF_MODEL=clef` for the full model, and optional gates
-  from `BENCH_MIN_PROBABILITY` and `BENCH_MIN_CONFIDENCE`.
+  default, `BENCH_CLEF_MODEL=clef` for the full model, `BENCH_VISION=1` to
+  attach the screenshot, and optional gates from `BENCH_MIN_PROBABILITY` and
+  `BENCH_MIN_CONFIDENCE`.
+- `apps/testbed/e2e.bench-jev.config.ts`: `jev()` with `JEV_API_KEY`, or a
+  compatible gateway through `BENCH_JEV_ENDPOINT` and `BENCH_JEV_MODEL`.
+- `apps/testbed/e2e.bench-laya.config.ts`: Laya through `systemOne()` with
+  `LAYA_API_KEY`.
 
 ```bash
 node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
@@ -284,26 +313,48 @@ Five `--no-cache` runs per row on the same machine, so every repetition
 spends real model calls. Small N: treat this as a smoke comparison, not a
 measurement.
 
-| Side | Model | Gates | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
+| Side | Model | Input | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| LLM agent | `gpt-6-luna` via OpenCodeX Zen | - | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
-| Decision model | `clef-flash` via Cloudflare | off (default) | 5/5 | 9.3s (8.5–10.8) | 12 | 12.3k in / 0 out | ~$0.0011 | ~$0.0055 |
-| Decision model | `clef` via Cloudflare | off (default) | 5/5 | 11.5s (10.1–13.9) | 12 | 12.3k in / 0 out | ~$0.0030 | ~$0.015 |
-| Decision model | `laya-rl-agent` via Laya, automatic routing | off (default) | 0/4, plus 1 run refused for credits | ~1s, blocked at the first decision | 1 | 684 in / 0 out | 1 credit per input token | - |
+| Decision model | `jev-1.13` via a System One gateway | text, flat | 5/5 | 4.4s (3.7–5.2) | 7 | 14.7k in / 0 out | ~$0.0006 | ~$0.003 |
+| Decision model | `clef-flash` via Cloudflare | text | 5/5 | 9.3s (8.5–10.8) | 12 | 12.3k in / 0 out | ~$0.0011 | ~$0.0055 |
+| Decision model | `clef` via Cloudflare | text | 5/5 | 11.5s (10.1–13.9) | 12 | 12.3k in / 0 out | ~$0.0030 | ~$0.015 |
+| Decision model | `clef` via Cloudflare | text + screenshot | 5/5 | 12.9s (11.5–13.9) | 12 | 16.4k in / 0 out | ~$0.0039 | ~$0.020 |
+| LLM agent | `gpt-6-luna` via OpenCodeX Zen | text | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
+| Decision model | `clef-flash` via Cloudflare | text + screenshot | 0/5 | 8.3s (6.5–10.3) | 10 | 13.5k in / 0 out | ~$0.0012 | ~$0.006 |
+| Decision model | `laya-rl-agent` via Laya | text | 0/4, 1 refused for credits | ~1s | 1 | 684 in / 0 out | ~$0.00002 | - |
 
-All three finish every run. The two decision models take the same 12-call
-trajectory on every repetition (type, Add, type, Add, check, then the
-completion check), so only latency varies; luna changes its path between
-runs (4–6 calls) and still lands each time. Clef-flash is the fastest at
-about 9s per flow, full Clef follows at about 11.5s, and luna takes about
-15s. Cost per run is close between luna and Clef-flash (about a tenth of a
-cent each) and roughly three times that for full Clef. Cloudflare bills per
-input token (clef $0.240/M, clef-flash $0.090/M). Luna is priced per token
-on OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input,
+Gates are off (the default) on every decision row. Five configurations
+finish every run. The decision models repeat one trajectory on every
+repetition (type, Add, type, Add, check, then the completion check), so only
+latency varies; luna changes its path between runs (4–6 calls) and still
+lands each time. Jev is the fastest and the cheapest of the finishers: it
+asks one flat question per action, so it needs 7 calls where the structured
+Clef path needs 12. Clef-flash follows at about 9s, full Clef at about 11.5s,
+and luna at about 15s.
+
+Costs are estimates from the measured input tokens and each provider's
+published input price: TypeSafe Jev $0.042/M, Cloudflare clef $0.240/M and
+clef-flash $0.090/M, Laya $0.0357/M; none of them bills output. Luna is
+priced on OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input,
 $0.50/M output); a traced run measured 26.9k input tokens at 73% cached
-prefix plus 169 output tokens. The whole comparison (15 runs) costs about
-$0.025. Small N and live prices change, so re-check the pricing pages
-before budgeting; Zen subscription users consume plan quota instead.
+prefix plus 169 output tokens. A screenshot adds roughly 300 input tokens
+per call on this viewport. The whole comparison costs about $0.05. Small N,
+and prices change: re-check the pricing pages before budgeting.
+
+Jev ran through a System One-compatible gateway that accepts only flat
+strings and returns HTTP 422 for structured values, so
+`apps/testbed/e2e.bench-jev.config.ts` uses `systemOne()` with plain strings
+when `BENCH_JEV_ENDPOINT` is set and `jev()` against TypeSafe's API
+otherwise.
+
+Vision helps full Clef read the screen and costs it 1.4s and a third more
+tokens per run on this flow, where the text tree already carries everything.
+It hurts Clef-flash here: after typing the second name, the screenshot pulls
+its target choice to the visible "Buy milk" checkbox (0.67) over the Add
+button (0.10), and the independent completion check fails the run. On a
+question the text cannot answer (the screen state withheld, the todos only
+in the screenshot), both Clef models pick the right answer at 0.99 with the
+image and the wrong one without it.
 
 Clef-flash finished 0 of 5 runs before four executor changes, each found
 on this flow. With the 0.9 gates that used to be the default it blocked on
@@ -326,15 +377,18 @@ probability 0.29 and confidence 0.10, over a flat distribution (navigate
 0.19, type 0.15, tap 0.14), so the step blocked before any action. Its
 response metadata shows the router classified the English prompt as Spanish
 and answered with its multilingual checkpoint, which may explain the flat
-distribution. The workspace ran out of free credits before a pinned English
-checkpoint could be tried, so this row is incomplete. Laya bills one credit
-per input token; a full five-run row at the 12.3k tokens per run Clef
-needed is about 62k credits.
+distribution. The workspace ran out of its 5,000 free credits before a pinned
+English checkpoint could be tried, so this row is incomplete. Laya bills one
+credit per input token ($0.0357/M) and does not bill failed requests; a
+full five-run row at the 12.3k tokens per run Clef needed is about 62k
+credits, roughly $0.002.
 
 ## Current limits
 
-- This executor uses semantic text only, including with Clef. Screenshots,
-  canvas-only controls, and image-based targets are not implemented.
+- Text is the default: without `vision: true` the executor uses semantic text
+  only, including with Clef. With vision, Clef also sees the masked
+  screenshot; canvas-only controls and image-based targets are still not
+  implemented.
 - `agent.waitFor` and `agent.extract` still use the runner's built-in
   judgment tier. Configure an AI SDK `model` or `judge` for them, or choose
   a separate LLM agent per call.

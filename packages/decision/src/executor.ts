@@ -1,8 +1,17 @@
-import type { ExecutorObservation, JsonValue, StepExecutor, StepVerdict } from 'e2e';
+import type { ExecutorObservation, ExecutorObserveOptions, JsonValue, StepExecutor, StepVerdict } from 'e2e';
 import { AgentError, isAgentError } from 'e2e/agent';
 import { candidates, type Candidate } from './candidates.ts';
 import { validateDecision } from './client.ts';
 import { fromEvaluationModel, isEvaluationModel } from './evaluation.ts';
+
+/**
+ * Encodes masked viewport pixels as a data URL, the way the runner hands
+ * screenshots to models. Only called with pixels the runner already cleared
+ * for model input.
+ */
+function pixelsImage(pixels: { data: Uint8Array; mediaType: string }): readonly string[] {
+  return ['data:' + pixels.mediaType + ';base64,' + Buffer.from(pixels.data).toString('base64')];
+}
 import type { DecisionExecutorOptions, DecisionResult } from './types.ts';
 
 const judgment = {
@@ -45,6 +54,12 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       // Structured transports take objects; flat ones keep the labeled
       // string and string-valued criteria some compatible endpoints require.
       const structured = model.structured === true;
+      // Vision needs both sides: the executor opt-in and a transport that
+      // declares it. Jev and AI SDK evaluation models are text-only, so
+      // pixels are never requested for them; withheld or tainted viewports
+      // carry no pixels and the decision falls back to text.
+      const useVision = options.vision === true && model.vision === true;
+      const observeOptions = (tree: boolean): ExecutorObserveOptions => useVision ? { tree, pixels: true } : { tree };
       /**
        * Makes exactly one request, recording failed requests and enforcing
        * the call ceiling before transport.
@@ -60,6 +75,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
             // History lists this step's earlier actions, so the model can tell
             // which params it already used; judgments never receive it.
             state: { screen: observation.text, path: observation.path ?? '', feedback, ...(history.length === 0 ? {} : { history: [...history] }) },
+            ...(useVision && observation.pixels ? { images: pixelsImage(observation.pixels) } : {}),
             instructions: structured
               ? {
                 goal: ctx.step.instruction,
@@ -108,7 +124,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       };
       /** A completion claim never passes on its own: verify it on a fresh screen. */
       const verifyCompletion = async (): Promise<StepVerdict> => {
-        const fresh = await ctx.observe();
+        const fresh = useVision ? await ctx.observe({ pixels: true }) : await ctx.observe();
         if (fresh.treeUnavailable || fresh.truncated || !fresh.text.trim()) return blocked('A complete semantic observation is required.');
         const verdict = await judge(fresh);
         // ASSERTION_INCONCLUSIVE is the assert step's code: an act step whose
@@ -122,7 +138,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       const history: string[] = [];
       const chosen = new Map<string, number>();
       while (calls < ctx.budgets.maxModelCalls) {
-        const observation = await ctx.observe({ tree: ctx.step.kind === 'act' });
+        const observation = await ctx.observe(observeOptions(ctx.step.kind === 'act'));
         if (observation.treeUnavailable || observation.truncated || !observation.text.trim()) {
           // Assertions fail inconclusive; actions block: there is nothing to judge or do.
           return ctx.step.kind === 'assert'

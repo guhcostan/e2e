@@ -341,4 +341,66 @@ describe('portable decision executor', () => {
       for (const request of seen) expect(Object.keys(request.criteria).length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  it('stays text-only by default: no pixels requested, no images sent', async () => {
+    const fixture = context({ kind: 'assert' });
+    const requests: DecisionRequest[] = [];
+    const executor = decisionExecutor({ model: model(async (request) => {
+      requests.push(request);
+      return answer(request, 'holds');
+    }) });
+    await executor.runStep(fixture.ctx);
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: false });
+    expect(requests[0]).not.toHaveProperty('images');
+  });
+
+  it('attaches masked pixels when vision and the model both allow it', async () => {
+    const pixels = { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 1 };
+    // Only an untainted attempt ever carries pixels; a tainted viewport withholds them.
+    const fixture = context({ kind: 'assert', tainted: false, observation: { pixels } });
+    const requests: DecisionRequest[] = [];
+    const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', vision: true,
+      decide: async (request) => { requests.push(request); return answer(request, 'holds'); } };
+    await decisionExecutor({ model: visionModel, vision: true }).runStep(fixture.ctx);
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: false, pixels: true });
+    expect(requests[0]?.images).toEqual(['data:image/png;base64,' + Buffer.from([1, 2, 3]).toString('base64')]);
+  });
+
+  it('falls back to text when pixels are withheld and never requests them for text-only models', async () => {
+    const withheld = context({ kind: 'assert', observation: { pixelsWithheld: 'PIXEL_TAINTED' as const } });
+    const withheldRequests: DecisionRequest[] = [];
+    const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', vision: true,
+      decide: async (request) => { withheldRequests.push(request); return answer(request, 'holds'); } };
+    expect(await decisionExecutor({ model: visionModel, vision: true }).runStep(withheld.ctx)).toMatchObject({ status: 'passed' });
+    expect(withheldRequests[0]).not.toHaveProperty('images');
+    const textOnly = context({ kind: 'assert', tainted: false, observation: { pixels: { data: new Uint8Array([9]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 } } });
+    const textRequests: DecisionRequest[] = [];
+    await decisionExecutor({ model: model(async (request) => { textRequests.push(request); return answer(request, 'holds'); }), vision: true }).runStep(textOnly.ctx);
+    expect(textOnly.observe).toHaveBeenCalledWith({ tree: false });
+    expect(textRequests[0]).not.toHaveProperty('images');
+  });
+
+  it('attaches pixels to the operation, target, and completion questions on a structured vision transport', async () => {
+    const pixels = { data: new Uint8Array([4, 5]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 };
+    const fixture = context({ params: { name: 'Ada' }, tree: twoFields, tainted: false, observation: { pixels } });
+    const requests: DecisionRequest[] = [];
+    const plan = [() => 'type', (request: DecisionRequest) => actionTarget(request, 'type', 'Ada'), () => 'complete', () => 'holds'];
+    let turn = 0;
+    const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', structured: true, vision: true,
+      decide: async (request) => { requests.push(request); return answer(request, (plan[turn++] ?? (() => 'unsupported'))(request)); } };
+    expect(await decisionExecutor({ model: visionModel, vision: true }).runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+    expect(requests).toHaveLength(4);
+    for (const request of requests) expect(request.images).toEqual(['data:image/png;base64,' + Buffer.from([4, 5]).toString('base64')]);
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: true, pixels: true });
+    expect(fixture.observe).toHaveBeenCalledWith({ pixels: true });
+  });
+
+  it('keeps AI SDK evaluation models text-only even with vision on', async () => {
+    const fixture = context({ kind: 'assert', tainted: false, observation: { pixels: { data: new Uint8Array([7]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 } } });
+    const doEvaluate = vi.fn(async () => ({ warnings: [], answers: { decision: { type: 'choice' as const, choice: 'holds', probabilities: { holds: 1, fails: 0, inconclusive: 0 } } } }));
+    const evaluating = { specificationVersion: 'v4' as const, provider: 'mock', modelId: 'mock', supportedQuestionTypes: ['choice' as const], doEvaluate };
+    expect(await decisionExecutor({ model: evaluating, vision: true }).runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: false });
+    expect(JSON.stringify(doEvaluate.mock.calls)).not.toContain('data:image');
+  });
 });

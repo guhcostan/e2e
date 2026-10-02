@@ -13,6 +13,12 @@ export interface DecisionRequest {
   readonly state: JsonValue;
   readonly instructions: JsonValue;
   readonly criteria: Readonly<Record<string, JsonValue>>;
+  /**
+   * Masked viewport screenshots as data URLs. Present only when the executor
+   * runs with `vision: true` and the model declares vision; withheld,
+   * tainted, or text-only transports send none.
+   */
+  readonly images?: readonly string[];
   readonly signal: AbortSignal;
 }
 
@@ -42,6 +48,8 @@ export interface DecisionModel {
    * stay on flat strings unless they opt in.
    */
   readonly structured?: boolean;
+  /** Whether the transport can carry viewport images. Clef does; Jev is text-only. */
+  readonly vision?: boolean;
   decide(request: DecisionRequest): Promise<DecisionResult>;
 }
 
@@ -56,6 +64,8 @@ export interface SystemOneOptions {
   readonly structured?: boolean;
   /** Decimal places the endpoint rounds probabilities to, an integer from 0 to 15. Omit for full precision. */
   readonly probabilityDecimals?: number;
+  /** Set for endpoints that accept the System One `images` array, such as Clef. Defaults to false. */
+  readonly vision?: boolean;
   readonly fetch?: typeof fetch;
 }
 
@@ -95,4 +105,8 @@ export interface DecisionExecutorOptions {
    * any value above 0 blocks it.
    */
   readonly minConfidence?: number;
+  // Attach the masked viewport screenshot to each decision request when the
+  // model supports vision. Defaults to false (semantic text only). Pixels
+  // degrade: withheld or tainted viewports decide from text alone.
+  readonly vision?: boolean;
 }

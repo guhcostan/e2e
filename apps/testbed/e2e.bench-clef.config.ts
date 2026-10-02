@@ -28,6 +28,8 @@ export default {
     default: {
       executor: decisionExecutor({
         model,
+        // BENCH_VISION=1 attaches the masked screenshot to every decision.
+        ...(process.env.BENCH_VISION === '1' ? { vision: true } : {}),
         ...(process.env.BENCH_MIN_PROBABILITY === undefined ? {} : { minProbability: Number(process.env.BENCH_MIN_PROBABILITY) }),
         ...(process.env.BENCH_MIN_CONFIDENCE === undefined ? {} : { minConfidence: Number(process.env.BENCH_MIN_CONFIDENCE) }),
       }),
