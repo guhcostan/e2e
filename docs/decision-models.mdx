@@ -173,10 +173,10 @@ throughout, no nested objects. The native APIs accept this shape too.
 ## Benchmark: LLM agent vs decision model
 
 The same todo flow runs under two configs against the same app and engine:
-`act drives a multi-action todo flow` in `apps/testbed/tests-agent/act.e2e.ts`
-(add "Buy milk" and "Walk the dog", mark "Buy milk" done, all assertions
-deterministic). One side uses the default agent executor with an LLM, the
-other uses `decisionExecutor`:
+`parametrized todo flow` in `apps/testbed/tests-bench/todo-flow.e2e.ts`
+(add "Buy milk" and "Walk the dog", mark "Buy milk" done, values as
+params, all assertions deterministic). One side uses the default agent
+executor with an LLM, the other uses `decisionExecutor`:
 
 - `apps/testbed/e2e.bench-luna.config.ts`: the default executor with luna
   served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
@@ -184,28 +184,42 @@ other uses `decisionExecutor`:
   (Clef-flash) from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`.
 
 ```bash
-node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1 --no-cache
-CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-clef.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1 --no-cache
+node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
+CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-clef.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
 ```
 
 ![Todo flow end state](/images/bench-todo-flow.png)
 
 ### Results
 
-Five `--no-cache` runs each on the same machine, so every repetition spends
-real model calls. Small N: treat this as a smoke comparison, not a
+Five `--no-cache` runs per row on the same machine, so every repetition
+spends real model calls. Small N: treat this as a smoke comparison, not a
 measurement.
 
-| Side | Model | Completed | Blocked / failed | Wall (mean) | Model calls / run | Input tokens / run |
+| Side | Model | Gates | Completed | Wall (mean) | Calls / run | Input tokens / run |
 | --- | --- | --- | --- | --- | --- | --- |
-| LLM agent | `gpt-6-luna` via OpenCodeX | 5/5 | 0 | 14.1s | 5.6 | ~25k |
-| Decision model | `clef-flash` via Cloudflare | 0/5 | 5 blocked, uncertain | ~1s | 1 | ~1.5k |
+| LLM agent | `gpt-6-luna` via OpenCodeX | - | 5/5 | 14.9s | 5.6 | ~25k |
+| Decision model | `clef-flash` via Cloudflare | 0.9 / 0.9 | 0/5 | ~1s | 1 | ~1.5k |
+| Decision model | `clef-flash` via Cloudflare | 0.6 / 0.5 | 0/5 | ~1.5s | 2 | ~3.4k |
+| Decision model | `clef-flash` via Cloudflare | 0.51 / 0.3 | 0/5 | ~1.5s | 2 | ~3.4k |
 
-Clef-flash answered all five runs identically (choice `a25`, probability
-0.619, confidence 0.387) and the executor blocked before any mutation: both
-gates default to 0.9, so an uncertain first action never runs. The LLM side
-completed every run in 12–16s at ~25k input tokens each; the decision side
-answered in about a second per run and refused to act on a guess.
+The decision rows all block on uncertainty, never on a wrong action: the
+unparametrized flow offers no type choice at all (values only come from
+params), so the first benchmark compared a free-text task against a
+params-only executor. With params, clef-flash answers the first decision at
+probability 0.747 / confidence 0.558, executes it under calibrated gates,
+then stalls on the second decision at 0.448 / 0.307 — below the 0.5 floor
+the executor itself enforces.
+
+The shape of the question moves confidence more than the gates do.
+Replaying the same screen against clef-flash three ways shows it: the flat
+30-way choice with string instructions answers `a22` at 0.756 / 0.571
+(reproducing the live run), while a hierarchical structured ask in the
+jev-ultrafast style answers the operation (`type_text`) at 0.921 / 0.813
+and the target within it at 0.971 / 0.889. Same model, same screen —
+narrower questions with structured values take confidence from 0.57 to
+0.89. Completing flows like this wants that shape (pick the verb, then
+the target) rather than lower gates.
 
 `apps/testbed/scripts/opencodex-probe.mjs` probes candidate OpenCodeX
 models without spending a full run.

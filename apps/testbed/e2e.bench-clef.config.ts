@@ -9,7 +9,7 @@ const model = clef({
 
 export default {
   projectId: 'dev.e2e.bench-clef',
-  tests: 'tests-agent/**/*.e2e.ts',
+  tests: 'tests-bench/**/*.e2e.ts',
   targets: [
     {
       name: 'web',
@@ -23,7 +23,11 @@ export default {
   timeout: 300_000,
   agents: {
     default: {
-      executor: decisionExecutor({ model }),
+      executor: decisionExecutor({
+        model,
+        ...(process.env.BENCH_MIN_PROBABILITY === undefined ? {} : { minProbability: Number(process.env.BENCH_MIN_PROBABILITY) }),
+        ...(process.env.BENCH_MIN_CONFIDENCE === undefined ? {} : { minConfidence: Number(process.env.BENCH_MIN_CONFIDENCE) }),
+      }),
     },
   },
 } satisfies E2EConfig;

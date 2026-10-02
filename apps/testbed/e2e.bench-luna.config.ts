@@ -4,7 +4,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 export default {
   projectId: 'dev.e2e.bench-luna',
-  tests: 'tests-agent/**/*.e2e.ts',
+  tests: 'tests-bench/**/*.e2e.ts',
   targets: [
     {
       name: 'web',
