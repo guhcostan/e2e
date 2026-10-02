@@ -108,7 +108,8 @@ export function validateDecision(result: DecisionResult, criteria: Readonly<Reco
   const distribution = probabilities as Record<string, number>;
   const keys = Object.keys(criteria);
   const values = keys.map((key) => distribution[key]);
-  const valid = Object.hasOwn(criteria, result.choice) &&
+  const valid = typeof result.choice === 'string' &&
+    Object.hasOwn(criteria, result.choice) &&
     Object.keys(distribution).length === keys.length &&
     Object.keys(distribution).every((key) => Object.hasOwn(criteria, key)) &&
     values.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) &&

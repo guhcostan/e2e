@@ -161,6 +161,7 @@ describe('portable decision executor', () => {
 
   it.each([
     (result: DecisionResult) => ({ ...result, choice: 'invented-node' }),
+    (result: DecisionResult) => ({ ...result, choice: Object('holds') as unknown as string }),
     (result: DecisionResult) => ({ ...result, confidence: NaN }),
     (result: DecisionResult) => ({ ...result, probabilities: { holds: 2, fails: -1, inconclusive: 0 } }),
     (result: DecisionResult) => ({ ...result, probabilities: { holds: 0.1, fails: 0.9, inconclusive: 0 } }),
