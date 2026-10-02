@@ -89,4 +89,28 @@ describe('System One transports', () => {
       expect(() => systemOne({ endpoint, model: 'local', provider: 'local', apiKey: 'test' })).toThrow('HTTP or HTTPS');
     }
   });
+
+  it('sends screenshots to vision endpoints alongside the state', async () => {
+    const image = 'data:image/png;base64,AQID';
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ success: true, result }));
+    await clef({ accountId: 'test', apiKey: 'credential', fetch: transport }).decide({ ...request, images: [image] });
+    expect(JSON.parse(String(transport.mock.calls[0]?.[1]?.body)).images).toEqual([image]);
+  });
+
+  it('never sends pixels to the text-only Jev transport', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    await jev({ apiKey: 'credential', fetch: transport }).decide({ ...request, images: ['data:image/png;base64,AQID'] });
+    expect(JSON.parse(String(transport.mock.calls[0]?.[1]?.body))).not.toHaveProperty('images');
+  });
+
+  it('drops images for compatible endpoints without vision and filters non-image values', async () => {
+    const plain = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    await systemOne({ endpoint: 'http://localhost/v1/systemone', model: 'local', provider: 'local', apiKey: 'test', fetch: plain })
+      .decide({ ...request, images: ['data:image/png;base64,AQID'] });
+    expect(JSON.parse(String(plain.mock.calls[0]?.[1]?.body))).not.toHaveProperty('images');
+    const vision = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    await systemOne({ endpoint: 'http://localhost/v1/systemone', model: 'local', provider: 'local', apiKey: 'test', vision: true, fetch: vision })
+      .decide({ ...request, images: ['data:image/png;base64,AQID', 'not-an-image'] });
+    expect(JSON.parse(String(vision.mock.calls[0]?.[1]?.body)).images).toEqual(['data:image/png;base64,AQID']);
+  });
 });

@@ -209,4 +209,41 @@ describe('portable decision executor', () => {
     for (const minProbability of [0, 0.5, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minProbability })).toThrow();
     for (const minConfidence of [-1, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minConfidence })).toThrow();
   });
+
+  it('stays text-only by default: no pixels requested, no images sent', async () => {
+    const fixture = context({ kind: 'assert' });
+    const requests: DecisionRequest[] = [];
+    const executor = decisionExecutor({ model: model(async (request) => {
+      requests.push(request);
+      return answer(request, 'holds');
+    }) });
+    await executor.runStep(fixture.ctx);
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: false });
+    expect(requests[0]).not.toHaveProperty('images');
+  });
+
+  it('attaches masked pixels when vision and the model both allow it', async () => {
+    const pixels = { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 1 };
+    const fixture = context({ kind: 'assert', observation: { pixels } });
+    const requests: DecisionRequest[] = [];
+    const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', vision: true,
+      decide: async (request) => { requests.push(request); return answer(request, 'holds'); } };
+    await decisionExecutor({ model: visionModel, vision: true }).runStep(fixture.ctx);
+    expect(fixture.observe).toHaveBeenCalledWith({ tree: false, pixels: true });
+    expect(requests[0]?.images).toEqual(['data:image/png;base64,' + Buffer.from([1, 2, 3]).toString('base64')]);
+  });
+
+  it('falls back to text when pixels are withheld and never requests them for text-only models', async () => {
+    const withheld = context({ kind: 'assert', observation: { pixelsWithheld: 'PIXEL_TAINTED' as const } });
+    const withheldRequests: DecisionRequest[] = [];
+    const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', vision: true,
+      decide: async (request) => { withheldRequests.push(request); return answer(request, 'holds'); } };
+    expect(await decisionExecutor({ model: visionModel, vision: true }).runStep(withheld.ctx)).toMatchObject({ status: 'passed' });
+    expect(withheldRequests[0]).not.toHaveProperty('images');
+    const textOnly = context({ kind: 'assert', observation: { pixels: { data: new Uint8Array([9]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 } } });
+    const textRequests: DecisionRequest[] = [];
+    await decisionExecutor({ model: model(async (request) => { textRequests.push(request); return answer(request, 'holds'); }), vision: true }).runStep(textOnly.ctx);
+    expect(textOnly.observe).toHaveBeenCalledWith({ tree: false });
+    expect(textRequests[0]).not.toHaveProperty('images');
+  });
 });
