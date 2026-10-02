@@ -26,6 +26,16 @@ describe('System One transports', () => {
     expect(decision).toMatchObject({ choice: 'holds', inputTokens: 100, outputTokens: 0, modelId: 'test-model' });
   });
 
+  it('defaults to clef-flash', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ success: true, result }));
+    await clef({ accountId: 'test', apiKey: 'credential', fetch: transport }).decide(request);
+    const call = transport.mock.calls[0];
+    if (call === undefined) throw new Error('expected a decision request');
+    const [url, init] = call;
+    expect(String(url)).toBe('https://api.cloudflare.com/client/v4/accounts/test/ai/run/@cf/cloudflare/clef-flash');
+    expect(JSON.parse(String(init?.body)).model).toBe('clef-flash');
+  });
+
   it('uses the Jev endpoint and a pinned model', async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
     await jev({ apiKey: 'credential', model: 'jev-1.13.0', fetch: transport }).decide(request);

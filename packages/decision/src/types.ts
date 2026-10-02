@@ -44,6 +44,7 @@ export interface SystemOneOptions {
 export interface ClefOptions {
   readonly accountId: string;
   readonly apiKey: string;
+  /** Defaults to 'clef-flash'. */
   readonly model?: 'clef' | 'clef-flash';
   readonly fetch?: typeof fetch;
 }

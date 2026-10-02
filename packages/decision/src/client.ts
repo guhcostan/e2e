@@ -77,7 +77,7 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
 /** Uses Cloudflare's hosted Clef or Clef-flash decision API. */
 export function clef(options: ClefOptions): DecisionModel {
   if (!options.accountId) throw new Error('Set the Cloudflare account id.');
-  const model = options.model ?? 'clef';
+  const model = options.model ?? 'clef-flash';
   return systemOne({
     provider: 'cloudflare',
     endpoint: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(options.accountId)}/ai/run/@cf/cloudflare/${model}`,
