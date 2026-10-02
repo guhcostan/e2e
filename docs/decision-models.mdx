@@ -377,8 +377,12 @@ probability 0.29 and confidence 0.10, over a flat distribution (navigate
 0.19, type 0.15, tap 0.14), so the step blocked before any action. Its
 response metadata shows the router classified the English prompt as Spanish
 and answered with its multilingual checkpoint, which may explain the flat
-distribution. The workspace ran out of its 5,000 free credits before a pinned
-English checkpoint could be tried, so this row is incomplete. Laya bills one
+distribution. The API accepts `model: 'english'` to pin the English
+checkpoint, and the bench config now sends it; on a shortened version of the
+same first question that checkpoint chose `tap` (0.64) over `type` (0.12),
+still the wrong first operation. The workspace's 5,000 free credits ran out
+before the pinned checkpoint could run the full flow, so this row is
+incomplete. Laya bills one
 credit per input token ($0.0357/M) and does not bill failed requests; a
 full five-run row at the 12.3k tokens per run Clef needed is about 62k
 credits, roughly $0.002.

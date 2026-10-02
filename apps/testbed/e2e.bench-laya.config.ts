@@ -2,11 +2,13 @@ import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
 import { decisionExecutor, systemOne } from '@e2e-dev/decision';
 
-// Laya serves the System One API and accepts structured values.
+// Laya serves the System One API and accepts structured values. Its router
+// picks a checkpoint by detected language and sent the full English prompt
+// to the multilingual one; 'english' pins the English checkpoint.
 const model = systemOne({
   endpoint: 'https://api.laya.studio/v1/systemone',
   apiKey: process.env.LAYA_API_KEY ?? '',
-  model: process.env.BENCH_LAYA_MODEL ?? 'laya-rl-agent',
+  model: process.env.BENCH_LAYA_MODEL ?? 'english',
   provider: 'laya',
   structured: true,
 });
