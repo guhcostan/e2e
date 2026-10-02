@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit --project examples/tsconfig.json"
   },
   "devDependencies": {
+    "@ai-sdk/typesafe-ai": "3.0.12",
     "@e2e-dev/decision": "workspace:*",
     "@e2e-dev/mobile": "workspace:*",
     "e2e": "workspace:*",

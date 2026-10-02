@@ -23,6 +23,10 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new Error('The decision endpoint must be an HTTP or HTTPS URL without embedded credentials.');
   }
+  const decimals = options.probabilityDecimals;
+  if (decimals !== undefined && (!Number.isInteger(decimals) || decimals < 0 || decimals > 15)) {
+    throw new Error('probabilityDecimals must be an integer from 0 to 15.');
+  }
   return {
     provider: options.provider,
     modelId: options.model,
@@ -71,6 +75,7 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
         modelId: data.model,
         inputTokens: data.usage.input_tokens,
         outputTokens: data.usage.output_tokens,
+        ...(decimals === undefined ? {} : { probabilityDecimals: decimals }),
       };
     },
   };
@@ -100,11 +105,13 @@ export function jev(options: JevOptions): DecisionModel {
     model: options.model ?? 'jev-latest',
     // The TypeSafe API accepts structured instructions and criteria values.
     structured: true,
+    // TypeSafe rounds probabilities to two places (its AI SDK provider
+    // declares the same), so a long distribution need not sum to exactly 1.
+    probabilityDecimals: 2,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }
 
-/** Validates custom transports too; a malformed or out-of-domain answer never authorizes an action. */
 /** Validates custom transports too; a malformed or out-of-domain answer never authorizes an action. Only the choice ids matter, so flat and structured criteria validate the same way. */
 export function validateDecision(result: DecisionResult, criteria: Readonly<Record<string, JsonValue>>): void {
   const invalid = () => new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
@@ -114,13 +121,17 @@ export function validateDecision(result: DecisionResult, criteria: Readonly<Reco
   const distribution = probabilities as Record<string, number>;
   const keys = Object.keys(criteria);
   const values = keys.map((key) => distribution[key]);
+  const decimals = result.probabilityDecimals;
+  if (decimals !== undefined && (!Number.isInteger(decimals) || decimals < 0 || decimals > 15)) throw invalid();
+  // Half a unit in the last place per rounded probability, accumulated over the sum.
+  const tolerance = 0.001 + (decimals === undefined ? 0 : keys.length * 0.5 * 10 ** -decimals);
   const valid = typeof result.choice === 'string' &&
     Object.hasOwn(criteria, result.choice) &&
     Object.keys(distribution).length === keys.length &&
     Object.keys(distribution).every((key) => Object.hasOwn(criteria, key)) &&
     values.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) &&
     Number.isFinite(result.confidence) && result.confidence >= 0 && result.confidence <= 1;
-  if (!valid || Math.abs(values.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 1) > 0.001 ||
+  if (!valid || Math.abs(values.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 1) > tolerance ||
     distribution[result.choice] !== Math.max(...values.map((value) => value ?? 0))) {
     throw new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
   }

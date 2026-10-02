@@ -13,7 +13,9 @@ and executor work with every provider.
 These models choose between values defined by code. They do not generate
 arbitrary text or implement the AI SDK language-model contract. Configure
 `decisionExecutor` under `executor`; `model` and `judge` on the agents entry
-still take AI SDK language models. The decision package requires no `ai` peer.
+still take AI SDK language models. `decisionExecutor` takes either a built-in
+transport or an [AI SDK evaluation model](#ai-sdk-evaluation-models); only the
+second needs the `ai` package.
 
 ## Install and configure
 
@@ -115,15 +117,21 @@ screen again. On structured transports (Clef, Jev) each iteration asks two
 narrower questions instead of one flat choice: first the operation (`type`,
 `tap`, `complete`, `unsupported`, and the rest), then the target within the
 chosen operation. Flat transports keep the single choice with string
-criteria. Choosing `complete` triggers a separate judgment on a fresh
+criteria. An operation with a single target dispatches it without a second
+question, since the API needs at least two options and the answer is
+already decided. Each acting decision also receives the actions this step
+has already taken, so the model can tell which params it used.
+Choosing `complete` triggers a separate judgment on a fresh
 screen, without action feedback or the prior-step ledger; a model's claim
 that it completed the task cannot pass the step on its own. When that verification is inconclusive,
 the act step blocks instead of failing an assertion.
 
 ## Probability, confidence, and inconclusive results
 
-By default, both the chosen option's probability and the response's
-confidence must reach `0.9`. Configure them separately:
+Both gates are off by default: the executor follows the most probable
+choice, the way a decision model is meant to be used. Set either one to
+make the executor block an action, or fail an assertion as inconclusive,
+when a decision is weaker than you accept:
 
 ```ts title="Executor setup"
 const executor = decisionExecutor({ model, minProbability: 0.95, minConfidence: 0.85 });
@@ -135,11 +143,10 @@ Responses with unknown choices, missing probabilities, out-of-range numbers,
 or a distribution that does not sum to one fail with `MODEL_OUTPUT_INVALID`.
 
 An assertion that contradicts the screen fails with `ASSERTION_FAILED`.
-A low-confidence assertion, incomplete semantic capture, or an explicit
-`inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An uncertain action
-returns a blocked `AUTOMATION_UNSUPPORTED` before the selected action is
-dispatched; actions from earlier confident decisions in the same step have
-already run.
+An assertion under a configured gate, incomplete semantic capture, or an explicit
+`inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An action under a
+configured gate returns a blocked `AUTOMATION_UNSUPPORTED` before it is
+dispatched; actions from earlier decisions in the same step have already run.
 
 The executor sends at most `maxModelCalls` requests and keeps each request
 under the step's abort signal. Calls, tokens, latency, and provider/model
@@ -171,8 +178,83 @@ Use `envelope: 'cloudflare'` when a service wraps its answer in
 cannot follow a redirect to another endpoint.
 
 Some compatible endpoints validate strictly and reject the structured `instructions`
-and `criteria` objects the native APIs accept. The executor therefore sends instructions as one labeled string and criteria as a string-valued record: plain strings
-throughout, no nested objects. The native APIs accept this shape too.
+and `criteria` objects the native APIs accept. `systemOne` therefore sends
+instructions as one labeled string and criteria as a string-valued record
+unless you pass `structured: true`. `clef()` and `jev()` send objects and ask
+two narrower questions per action: the operation first, then the target
+within it. Pass `probabilityDecimals` when an endpoint rounds its
+probabilities; `jev()` declares the two places TypeSafe rounds to, so a long
+distribution that sums to 0.99 still validates.
+
+## AI SDK evaluation models
+
+`decisionExecutor` also accepts any AI SDK
+[evaluation model](https://ai-sdk.dev/docs/ai-sdk-core/evaluation) that answers
+choice questions, such as TypeSafe's official provider. Each decision is one
+`experimental_evaluate` call with one choice question and no retries, so the
+runner's call budget counts provider requests exactly. Install `ai` and the
+provider package next to `@e2e-dev/decision`.
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { web } from '@e2e-dev/web';
+import { decisionExecutor } from '@e2e-dev/decision';
+import { typeSafeAi } from '@ai-sdk/typesafe-ai';
+
+// Reads TYPESAFE_AI_API_KEY. Any AI SDK evaluation model with choice
+// distributions works the same way.
+export default {
+  targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
+  agents: {
+    default: { executor: decisionExecutor({ model: typeSafeAi.evaluationModel('jev-latest') }) },
+  },
+} satisfies E2EConfig;
+```
+
+Configured gates apply the same way. The executor reads the selected
+probability from the answer's distribution, so a model must return one: TypeSafe does, while the
+language-model adapters for OpenAI, Anthropic, and Google answer without a
+distribution and the executor rejects those answers with
+`MODEL_OUTPUT_INVALID`. Confidence is provider metadata keyed by question id
+(TypeSafe reports it under `providerMetadata.typesafe.confidence`). A model
+that reports none counts as confidence 0, so any `minConfidence` above 0
+blocks it.
+
+It works the other way too. `evaluationModel()` exposes `clef()`, `jev()`,
+and `systemOne()` endpoints as AI SDK evaluation models, for Cloudflare's Clef,
+which has no AI SDK provider, or for a self-hosted endpoint. Pass the result to
+`decisionExecutor` or call `experimental_evaluate` in application code:
+
+```ts title="evaluate.ts"
+import { experimental_evaluate } from 'ai';
+import { clef, evaluationModel } from '@e2e-dev/decision';
+
+const model = evaluationModel(clef({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
+  apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
+}));
+
+const result = await experimental_evaluate({
+  model,
+  state: { message: 'I was charged twice.' },
+  questions: {
+    department: {
+      type: 'choice',
+      instructions: 'Which team should handle this?',
+      criteria: { billing: 'Payments and refunds', support: 'Other requests' },
+    },
+  },
+});
+
+console.log(result.answers.department.choice, result.answers.department.probabilities);
+```
+
+These adapters answer choice questions only; score and boolean questions are
+rejected before any request. Confidence lands in `providerMetadata` under the
+transport's provider name, the convention TypeSafe's provider uses. Run
+through `experimental_evaluate` with full Clef, the benchmark flow below
+completed 3 of 3 runs with the same 12 calls and 11.7k input tokens per run as
+the direct transport.
 
 ## Benchmark: LLM agent vs decision model
 
@@ -185,7 +267,9 @@ executor with an LLM, the other uses `decisionExecutor`:
 - `apps/testbed/e2e.bench-luna.config.ts`: the default executor with luna
   served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
 - `apps/testbed/e2e.bench-clef.config.ts`: `decisionExecutor` with `clef()`
-  (Clef-flash) from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`.
+  from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`; Clef-flash by
+  default, `BENCH_CLEF_MODEL=clef` for the full model, and optional gates
+  from `BENCH_MIN_PROBABILITY` and `BENCH_MIN_CONFIDENCE`.
 
 ```bash
 node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
@@ -200,48 +284,39 @@ Five `--no-cache` runs per row on the same machine, so every repetition
 spends real model calls. Small N: treat this as a smoke comparison, not a
 measurement.
 
-| Side | Model | Shape · gates | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
+| Side | Model | Gates | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| LLM agent | `gpt-6-luna` via OpenCodeX Zen | - | 5/5 | 14.9s (13.7–16.0) | 6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
-| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.9 / 0.9 | 0/5, op1 at 0.909 / 0.802 | ~1s | 1 | ~0.8k in / 0 out | ~$0.00007 | ~$0.0004 |
-| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.75 | 0/5, op2 at 0.451 / 0.173 | ~2s | 3 | ~2.3k in / 0 out | ~$0.0002 | ~$0.001 |
-| Decision model | `clef` via Cloudflare | hierarchical · 0.51 / 0 | 5/5 | 14.4s (10.7–18.5) | 12 | ~11.7k in / 0 out | ~$0.0028 | ~$0.014 |
+| LLM agent | `gpt-6-luna` via OpenCodeX Zen | - | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
+| Decision model | `clef-flash` via Cloudflare | off (default) | 5/5 | 9.3s (8.5–10.8) | 12 | 12.3k in / 0 out | ~$0.0011 | ~$0.0055 |
+| Decision model | `clef` via Cloudflare | off (default) | 5/5 | 11.5s (10.1–13.9) | 12 | 12.3k in / 0 out | ~$0.0030 | ~$0.015 |
 
-Success rate and reliability first: luna and full Clef both finish 5/5 while
-clef-flash finishes none — its answers are bit-identical across repetitions
-(maximally deterministic) but stay under every usable gate. Full Clef takes
-exactly 12 calls on all five runs (same trajectory, only latency varies),
-while luna varies its path (4–6 calls) and still lands every time. On
-speed the two finishers tie at ~14–15s per flow. On cost, Cloudflare bills
-per input token (clef $0.240/M, clef-flash $0.090/M: five runs total ~$0.014
-for full Clef, ~$0.001 or less for flash). Luna is priced per token on
-OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input, $0.50/M
-output); a fresh traced run measured 26.9k input tokens at 73% cached prefix
-plus 169 output tokens, which works out to ~$0.001 per run and ~$0.005 for
-five. The whole comparison (15 runs) costs on the order of $0.02. Small N
-and live prices change, so re-check the pricing pages before budgeting; Zen
-subscription users consume plan quota instead of per-token billing.
+All three finish every run. The two decision models take the same 12-call
+trajectory on every repetition (type, Add, type, Add, check, then the
+completion check), so only latency varies; luna changes its path between
+runs (4–6 calls) and still lands each time. Clef-flash is the fastest at
+about 9s per flow, full Clef follows at about 11.5s, and luna takes about
+15s. Cost per run is close between luna and Clef-flash (about a tenth of a
+cent each) and roughly three times that for full Clef. Cloudflare bills per
+input token (clef $0.240/M, clef-flash $0.090/M). Luna is priced per token
+on OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input,
+$0.50/M output); a traced run measured 26.9k input tokens at 73% cached
+prefix plus 169 output tokens. The whole comparison (15 runs) costs about
+$0.025. Small N and live prices change, so re-check the pricing pages
+before budgeting; Zen subscription users consume plan quota instead.
 
-The decision rows all block on uncertainty, never on a wrong action: the
-unparametrized flow offers no type choice at all (values only come from
-params), so the first benchmark compared a free-text task against a
-params-only executor. With params, clef-flash answers the first decision at
-probability 0.747 / confidence 0.558, executes it under calibrated gates,
-then stalls on the second decision at 0.448 / 0.307 — below the 0.5 floor
-the executor itself enforces.
-
-The shape of the question moves confidence more than the gates do. The
-hierarchical executor now asks the operation first and the target within
-it, with structured values on native transports. Against the live flow
-that takes the first operation from 0.747 / 0.558 to 0.909 / 0.802 and
-the first target to 0.940 / 0.775 — the right choices, still under the
-0.9 defaults. The second operation then diffuses at 0.451 / 0.173 across
-several plausible continuations (submit, press Enter, keep typing), which
-no gate setting can honestly resolve: that branch point wants richer
-framing, not lower thresholds.
-
-`apps/testbed/scripts/opencodex-probe.mjs` probes candidate OpenCodeX
-models without spending a full run.
+Clef-flash finished 0 of 5 runs before four executor changes, each found
+on this flow. With the 0.9 gates that used to be the default it blocked on
+its first decision (probability 0.909, confidence 0.802), so the gates are
+now opt-in. Without gates it reached a target question with one option,
+which the API rejects with HTTP 422, so a lone target now dispatches
+directly. It then oscillated between typing the two names into the same
+field until the call budget ran out, because each decision saw only the
+last action: decisions now receive the step's action history, and the
+repeat guard counts across the whole step. Last, it moved on after typing
+the second name without submitting it; the operation and target questions
+now state that typed text is not saved until it is submitted. The
+independent completion check caught that last mistake and failed the run
+instead of passing it.
 
 ## Current limits
 
@@ -258,7 +333,8 @@ models without spending a full run.
   decision model. Assertions do not reuse the acting model's history.
 - A task that cannot conclude within its model-call budget returns
   `AUTOMATION_UNSUPPORTED`. The runner owns action-budget and timeout errors.
-- Choosing the same action three times without a semantic change blocks the
+- Choosing the same action on the same screen three times anywhere in the
+  step, which also catches an oscillation between two actions, blocks the
   step as `AUTOMATION_UNSUPPORTED`.
 - Drag, upload, hover, arbitrary key sequences, and point actions are not
   implemented. Use locators or a separate LLM agent for these operations.

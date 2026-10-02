@@ -2,6 +2,7 @@ import type { ExecutorObservation, JsonValue, StepExecutor, StepVerdict } from '
 import { AgentError, isAgentError } from 'e2e/agent';
 import { candidates, type Candidate } from './candidates.ts';
 import { validateDecision } from './client.ts';
+import { fromEvaluationModel, isEvaluationModel } from './evaluation.ts';
 import type { DecisionExecutorOptions, DecisionResult } from './types.ts';
 
 const judgment = {
@@ -27,12 +28,14 @@ const operations: Record<string, string> = {
 
 /** Builds a portable executor for bounded semantic actions and independent screen assertions. */
 export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor {
-  const minProbability = options.minProbability ?? 0.9;
-  const minConfidence = options.minConfidence ?? 0.9;
-  if (!Number.isFinite(minProbability) || minProbability <= 0.5 || minProbability > 1 ||
+  // Gates are opt-in: by default the executor follows the most probable choice.
+  const minProbability = options.minProbability ?? 0;
+  const minConfidence = options.minConfidence ?? 0;
+  if (!Number.isFinite(minProbability) || minProbability < 0 || minProbability > 1 ||
     !Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
-    throw new Error('minProbability must be greater than 0.5 and at most 1; minConfidence must be between 0 and 1.');
+    throw new Error('minProbability and minConfidence must be between 0 and 1.');
   }
+  const model = isEvaluationModel(options.model) ? fromEvaluationModel(options.model) : options.model;
   return {
     name: 'system-one',
     version: '1',
@@ -41,20 +44,22 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       let calls = 0;
       // Structured transports take objects; flat ones keep the labeled
       // string and string-valued criteria some compatible endpoints require.
-      const structured = options.model.structured === true;
+      const structured = model.structured === true;
       /**
        * Makes exactly one request, recording failed requests and enforcing
        * the call ceiling before transport.
        */
-      const decide = async (observation: ExecutorObservation, criteria: Readonly<Record<string, JsonValue>>, ask: { question: string; operation?: string }, feedback = ''): Promise<DecisionResult> => {
+      const decide = async (observation: ExecutorObservation, criteria: Readonly<Record<string, JsonValue>>, ask: { question: string; operation?: string }, feedback = '', history: readonly string[] = []): Promise<DecisionResult> => {
         ctx.signal.throwIfAborted();
         const started = performance.now();
         const startedAt = new Date().toISOString();
         calls += 1;
         let result: DecisionResult | undefined;
         try {
-          result = await options.model.decide({
-            state: { screen: observation.text, path: observation.path ?? '', feedback },
+          result = await model.decide({
+            // History lists this step's earlier actions, so the model can tell
+            // which params it already used; judgments never receive it.
+            state: { screen: observation.text, path: observation.path ?? '', feedback, ...(history.length === 0 ? {} : { history: [...history] }) },
             instructions: structured
               ? {
                 goal: ctx.step.instruction,
@@ -79,8 +84,8 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
           return result;
         } finally {
           ctx.budgets.recordModelCall({
-            provider: options.model.provider,
-            modelId: result?.modelId ?? options.model.modelId,
+            provider: model.provider,
+            modelId: result?.modelId ?? model.modelId,
             startedAt,
             durationMs: performance.now() - started,
             ...(result?.inputTokens === undefined ? {} : { inputTokens: result.inputTokens }),
@@ -114,8 +119,8 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
         return verdict;
       };
       let feedback = '';
-      let previousAction = '';
-      let repeated = 0;
+      const history: string[] = [];
+      const chosen = new Map<string, number>();
       while (calls < ctx.budgets.maxModelCalls) {
         const observation = await ctx.observe({ tree: ctx.step.kind === 'act' });
         if (observation.treeUnavailable || observation.truncated || !observation.text.trim()) {
@@ -135,7 +140,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
             unsupported: 'The available actions and test params cannot complete the task.',
           };
           available.forEach((item, index) => { criteria[`a${index}`] = item.description; });
-          const result = await decide(observation, criteria, { question: 'Choose the next single action, or complete when the task is done. Text and destinations must come from declared params.' }, feedback);
+          const result = await decide(observation, criteria, { question: 'Choose the next single action, or complete when the task is done. Text and destinations must come from declared params.' }, feedback, history);
           if (!confident(result)) return blocked(`The next action is uncertain. ${summary(result)}`);
           if (result.choice === 'unsupported') return blocked('The decision model could not complete the task with the available actions and params.');
           if (result.choice === 'complete') {
@@ -154,7 +159,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
             unsupported: 'The available actions and test params cannot complete the task.',
           };
           for (const verb of verbs) opCriteria[verb] = operations[verb] ?? verb;
-          const op = await decide(observation, opCriteria, { question: 'Choose the single operation that advances the task from the current screen, or complete when the task is done.' }, feedback);
+          const op = await decide(observation, opCriteria, { question: 'Choose the single operation that advances the task from the current screen, or complete when the task is done. Typed text is not saved until it is submitted.' }, feedback, history);
           if (!confident(op)) return blocked(`The next operation is uncertain. ${summary(op)}`);
           if (op.choice === 'unsupported') return blocked('The decision model could not complete the task with the available actions and params.');
           if (op.choice === 'complete') {
@@ -165,22 +170,33 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
           available.forEach((item, index) => {
             if (item.verb === op.choice) targets[`a${index}`] = { element: item.description };
           });
-          const pick = await decide(observation, targets, { question: 'Choose the target for the chosen operation.', operation: op.choice }, feedback);
-          if (!confident(pick)) return blocked(`The next target is uncertain. ${summary(pick)}`);
-          candidate = available[Number(pick.choice.slice(1))];
+          const ids = Object.keys(targets);
+          // A choice question needs at least two options (providers reject
+          // one), and a lone target is already decided: dispatch it directly.
+          if (ids.length === 1) {
+            candidate = available[Number(ids[0]!.slice(1))];
+          } else {
+            if (calls >= ctx.budgets.maxModelCalls) break;
+            const pick = await decide(observation, targets, { question: 'Choose the target for the chosen operation. Typed text is not saved until it is submitted.', operation: op.choice }, feedback, history);
+            if (!confident(pick)) return blocked(`The next target is uncertain. ${summary(pick)}`);
+            candidate = available[Number(pick.choice.slice(1))];
+          }
           if (!candidate || candidate.verb !== op.choice) throw new AgentError('MODEL_OUTPUT_INVALID', 'The decision did not name an available action.');
         }
         const signature = JSON.stringify([observation.path, observation.text, candidate.description]);
-        repeated = signature === previousAction ? repeated + 1 : 1;
-        previousAction = signature;
-        if (repeated >= 3) return blocked('The same action was chosen three times without a semantic change.');
+        // Counts across the whole step, so an A-B-A-B oscillation is caught too.
+        const times = (chosen.get(signature) ?? 0) + 1;
+        chosen.set(signature, times);
+        if (times >= 3) return blocked('The same action was chosen three times on the same screen without progress.');
         try {
           await candidate.run();
           feedback = JSON.stringify({ action: candidate.description, status: 'completed' });
+          history.push(candidate.description + ' (completed)');
         } catch (error) {
           if (!isAgentError(error) || !['LOCATOR_NOT_FOUND', 'LOCATOR_AMBIGUOUS', 'ACTION_FAILED'].includes(error.code)) throw error;
           // The action may have changed state: only a fresh observation can authorize the next choice.
           feedback = `The last action returned ${error.code}. Inspect the current screen before deciding whether to retry.`;
+          history.push(candidate.description + ' (' + error.code + ')');
         }
       }
       return blocked(`The step did not conclude within its ${ctx.budgets.maxModelCalls} decision calls.`);

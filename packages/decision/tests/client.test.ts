@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { clef, jev, systemOne } from '../src/index.ts';
+import { validateDecision } from '../src/client.ts';
 import type { DecisionRequest } from '../src/index.ts';
 
 const request: DecisionRequest = {
@@ -42,6 +43,18 @@ describe('System One transports', () => {
     const [url, init] = transport.mock.calls[0]!;
     expect(String(url)).toBe('https://api.typesafe.ai/v1/systemone');
     expect(JSON.parse(String(init?.body)).model).toBe('jev-1.13.0');
+  });
+
+  it('accepts Jev distributions rounded to two places and still rejects a broken one', async () => {
+    const criteria = { a: 'A', b: 'B', c: 'C' };
+    const reply = (probabilities: Record<string, number>) => vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ...result, answers: { decision: { type: 'choice', choice: 'a', confidence: 0.9, probabilities } },
+    }));
+    const rounded = await jev({ apiKey: 'credential', fetch: reply({ a: 0.67, b: 0.33, c: 0.01 }) }).decide({ ...request, criteria });
+    expect(rounded).toMatchObject({ choice: 'a', probabilityDecimals: 2 });
+    expect(() => validateDecision(rounded, criteria)).not.toThrow();
+    const broken = await jev({ apiKey: 'credential', fetch: reply({ a: 0.6, b: 0.2, c: 0.1 }) }).decide({ ...request, criteria });
+    expect(() => validateDecision(broken, criteria)).toThrow();
   });
 
   it.each([401, 429, 529])('reports HTTP %s without response content', async (status) => {

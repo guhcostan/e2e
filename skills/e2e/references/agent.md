@@ -27,11 +27,16 @@ any provider.
 Decision models use a choice API over HTTP: Clef, Clef-flash, and Jev speak the System One decision API, and a locally hosted model works too. Install
 `@e2e-dev/decision` and put `decisionExecutor({ model: clef({ accountId, apiKey }) })`
 or `decisionExecutor({ model: jev({ apiKey }) })` under `executor`, not the
-agents entry's `model` or `judge`. They can run semantic `act` and `assert`
+agents entry's `model` or `judge`. `decisionExecutor` also takes an AI SDK
+evaluation model with choice distributions, such as
+`typeSafeAi.evaluationModel('jev-latest')` from `@ai-sdk/typesafe-ai` (needs
+`ai`), and `evaluationModel(clef(...))` exposes a built-in transport to
+`experimental_evaluate`. They can run semantic `act` and `assert`
 steps. Text, option labels, and typed destinations must come from string
 `params`; secrets stay declared handles filled by the runner. Both
-probability and confidence default to a 0.9 gate. Uncertain actions block,
-and uncertain assertions fail with `ASSERTION_INCONCLUSIVE`. Only bounded
+probability and confidence gates are off by default (the executor follows
+the most probable choice); set `minProbability` or `minConfidence` to block
+weaker actions and fail weaker assertions with `ASSERTION_INCONCLUSIVE`. Only bounded
 semantic actions are supported; pixels and generated strings are not.
 `waitFor` and `extract` still need an AI SDK model or judge. See the shipped
 `docs/decision-models.mdx` or

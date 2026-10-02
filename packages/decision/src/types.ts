@@ -1,3 +1,4 @@
+import type { Experimental_EvaluationModelV4 } from '@ai-sdk/provider';
 import type { JsonValue } from 'e2e';
 
 /**
@@ -23,6 +24,12 @@ export interface DecisionResult {
   readonly modelId: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  /**
+   * Decimal places the provider rounds probabilities to, when it rounds.
+   * Validation then allows half a unit in the last place per option in the
+   * distribution sum, the same rule AI SDK evaluate applies.
+   */
+  readonly probabilityDecimals?: number;
 }
 
 /** The transport an executor uses; it has no dependency on an engine or the AI SDK. */
@@ -47,6 +54,8 @@ export interface SystemOneOptions {
   readonly envelope?: 'direct' | 'cloudflare';
   /** Set for endpoints that accept structured values, such as Clef and Jev. Defaults to false. */
   readonly structured?: boolean;
+  /** Decimal places the endpoint rounds probabilities to, an integer from 0 to 15. Omit for full precision. */
+  readonly probabilityDecimals?: number;
   readonly fetch?: typeof fetch;
 }
 
@@ -66,11 +75,24 @@ export interface JevOptions {
   readonly fetch?: typeof fetch;
 }
 
-/** Confidence and probability gates apply to every action and assertion. */
+/** Optional confidence and probability gates; when set, they apply to every action and assertion. */
 export interface DecisionExecutorOptions {
-  readonly model: DecisionModel;
-  /** Minimum probability of the selected option, greater than 0.5 and at most 1. Default 0.9. */
+  /**
+   * A built-in transport (`clef()`, `jev()`, `systemOne()`) or any AI SDK
+   * evaluation model that answers choice questions, such as
+   * `typeSafeAi.evaluationModel('jev-latest')`. Evaluation models run
+   * through `experimental_evaluate` and need the `ai` package.
+   */
+  readonly model: DecisionModel | Experimental_EvaluationModelV4;
+  /**
+   * Minimum probability of the selected option, between 0 and 1. Default 0:
+   * no gate, the executor follows the most probable choice.
+   */
   readonly minProbability?: number;
-  /** Minimum reported confidence, between 0 and 1. Default 0.9. */
+  /**
+   * Minimum reported confidence, between 0 and 1. Default 0: no gate. An
+   * evaluation model that reports no confidence statistic counts as 0, so
+   * any value above 0 blocks it.
+   */
   readonly minConfidence?: number;
 }

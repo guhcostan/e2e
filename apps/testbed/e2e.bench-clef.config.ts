@@ -1,12 +1,14 @@
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
-import { clef, decisionExecutor } from '@e2e-dev/decision';
+import { clef, decisionExecutor, evaluationModel } from '@e2e-dev/decision';
 
-const model = clef({
+const transport = clef({
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
   apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
   model: process.env.BENCH_CLEF_MODEL === 'clef' ? 'clef' : 'clef-flash',
 });
+// BENCH_VIA_EVALUATE=1 routes every decision through AI SDK experimental_evaluate.
+const model = process.env.BENCH_VIA_EVALUATE === '1' ? evaluationModel(transport) : transport;
 
 export default {
   projectId: 'dev.e2e.bench-clef',

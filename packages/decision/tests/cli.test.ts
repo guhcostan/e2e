@@ -19,7 +19,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const password = 'decision-secret-test-value';
 const requestSchema = z.object({
   model: z.string(), state: z.object({ screen: z.string(), path: z.string(), feedback: z.string() }),
-  questions: z.object({ decision: z.object({ instructions: z.string(), criteria: z.record(z.string(), z.string()) }) }),
+  questions: z.object({ decision: z.object({ instructions: z.unknown(), criteria: z.record(z.string(), z.unknown()) }) }),
 });
 const reportSchema = z.object({ run: z.object({
   results: z.array(z.object({ titlePath: z.array(z.string()), status: z.string(), attempts: z.array(z.object({
@@ -81,24 +81,36 @@ describe.runIf(moduleHooksSupported)('decision executors through the built CLI a
       const body = requestSchema.parse(rawBody);
       requests.push(rawBody);
       const { criteria, instructions } = body.questions.decision;
+      const instructionText = typeof instructions === 'string' ? instructions : JSON.stringify(instructions) ?? '';
+      const label = (value: unknown): string => {
+        if (typeof value === 'string') return value;
+        if (value !== null && typeof value === 'object' && 'element' in value && typeof value.element === 'string') return value.element;
+        return JSON.stringify(value) ?? '';
+      };
+      const options: Record<string, string> = {};
+      for (const [key, value] of Object.entries(criteria)) options[key] = label(value);
       const findAction = (action: string, value?: string, name?: string): string => {
-        const match = Object.entries(criteria).find(([, description]) =>
+        const match = Object.entries(options).find(([, description]) =>
           (description === action || description.startsWith(`${action} `)) &&
           (value === undefined || description.includes(JSON.stringify(value))) &&
           (name === undefined || description.includes(JSON.stringify(name))));
         if (!match) throw new Error(`The model was not offered ${action}.`);
         return match[0];
       };
+      // Structured transports ask the operation first (instructions without
+      // an operation field), then the target within it; flat ones ask once.
+      const asksOperation = typeof instructions === 'object' && instructions !== null && !Array.isArray(instructions) && !('operation' in instructions);
+      const pick = (verb: string, value?: string, name?: string): string => asksOperation ? verb : findAction(verb, value, name);
       let choice: string;
-      if ('holds' in criteria) choice = instructions.includes('negative') ? 'fails' : 'holds';
-      else if (instructions.includes('unsafe')) choice = findAction('navigate');
-      else if (!body.state.path.startsWith('/form') && !body.state.path.startsWith('/login')) choice = findAction('navigate');
-      else if (!body.state.screen.includes('value="Ada"')) choice = findAction('type', 'Ada');
+      if ('holds' in criteria) choice = instructionText.includes('negative') ? 'fails' : 'holds';
+      else if (instructionText.includes('unsafe')) choice = pick('navigate');
+      else if (!body.state.path.startsWith('/form') && !body.state.path.startsWith('/login')) choice = pick('navigate');
+      else if (!body.state.screen.includes('value="Ada"')) choice = pick('type', 'Ada');
       else if (body.state.screen.includes('Saved Ada')) choice = 'complete';
-      else if (body.state.path === '/login' && !body.state.feedback.includes('typeSecret')) choice = findAction('typeSecret');
-      else choice = findAction('tap', undefined, body.state.path === '/login' ? 'Sign in' : 'Save');
-      const invalid = instructions.includes('invalid');
-      const uncertain = instructions.includes('uncertain');
+      else if (body.state.path === '/login' && !body.state.feedback.includes('typeSecret')) choice = pick('typeSecret');
+      else choice = pick('tap', undefined, body.state.path === '/login' ? 'Sign in' : 'Save');
+      const invalid = instructionText.includes('invalid');
+      const uncertain = instructionText.includes('uncertain');
       const result = {
         model: body.model,
         answers: { decision: {
@@ -123,7 +135,7 @@ describe.runIf(moduleHooksSupported)('decision executors through the built CLI a
         targets: [{ engine: web(), app: { url: ${JSON.stringify(appUrl)} } }],
         credentials: { admin: { username: 'Ada', password: ${JSON.stringify(password)} } },
         agents: {
-          clef: { executor: decisionExecutor({ model: clef({ accountId: 'test', apiKey: 'test', fetch: (_url, init) => fetch(${JSON.stringify(providerUrl + '/cloudflare')}, init) }) }) },
+          clef: { executor: decisionExecutor({ model: clef({ accountId: 'test', apiKey: 'test', fetch: (_url, init) => fetch(${JSON.stringify(providerUrl + '/cloudflare')}, init) }), minProbability: 0.9, minConfidence: 0.9 }) },
           jev: { executor: decisionExecutor({ model: jev({ apiKey: 'test', fetch: (_url, init) => fetch(${JSON.stringify(providerUrl + '/direct')}, init) }) }) },
         },
       };`);

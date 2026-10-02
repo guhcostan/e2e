@@ -44,6 +44,12 @@ export function actionTarget(request: DecisionRequest, action: string, value?: s
   return entry[0];
 }
 
+/** Two text fields, so an operation on them has a real target question. */
+export const twoFields: ExecutorNode = { id: 'root', children: [
+  { id: 'name', role: 'textbox', name: 'Name', value: '' },
+  { id: 'nick', role: 'textbox', name: 'Nickname', value: '' },
+] };
+
 export function context(options: {
   kind?: 'act' | 'assert'; params?: Readonly<Record<string, JsonValue>>;
   tree?: ExecutorNode; maxModelCalls?: number; observation?: Partial<ExecutorObservation>;

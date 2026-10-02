@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentError } from 'e2e';
 import { decisionExecutor } from '../src/index.ts';
 import type { DecisionModel, DecisionRequest, DecisionResult } from '../src/index.ts';
-import { actionChoice, actionTarget, answer, context, offersPrefix } from './helpers.ts';
+import { actionChoice, actionTarget, answer, context, offersPrefix, twoFields } from './helpers.ts';
 
 /** A transport whose decisions are controlled by the test. */
 function model(decide: DecisionModel['decide']): DecisionModel {
   return { provider: 'scripted', modelId: 'scripted', decide };
 }
+
+/** Gates are opt-in; the tests that exercise them configure these. */
+const gated = { minProbability: 0.9, minConfidence: 0.9 };
 
 describe('portable decision executor', () => {
   it('fills a declared value and verifies completion independently', async () => {
@@ -61,20 +64,60 @@ describe('portable decision executor', () => {
     expect(requests[1]?.instructions).not.toContain('"Ada"');
   });
 
-  it.each(['probability', 'confidence'])('blocks uncertain actions on the %s gate before mutation', async (gate) => {
+  it.each(['probability', 'confidence'])('blocks uncertain actions on a configured %s gate before mutation', async (gate) => {
     const fixture = context({ params: { name: 'Ada' } });
     const executor = decisionExecutor({ model: model(async (request) => {
       const result = answer(request, actionChoice(request, 'type', 'Ada'));
       return gate === 'confidence' ? { ...result, confidence: 0.2 }
         : { ...result, probabilities: { ...result.probabilities, [result.choice]: 0.7, unsupported: 0.3 } };
-    }) });
+    }), ...gated });
     expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
     expect(fixture.actions.type).not.toHaveBeenCalled();
   });
 
-  it('fails low-confidence assertions instead of approving them', async () => {
+  it('follows the most probable choice when no gate is configured', async () => {
+    const fixture = context({ params: { name: 'Ada' } });
+    let turn = 0;
+    const executor = decisionExecutor({ model: model(async (request) => {
+      const choice = turn++ === 0 ? actionChoice(request, 'type', 'Ada') : turn === 2 ? 'complete' : 'holds';
+      const others = Object.keys(request.criteria).filter((key) => key !== choice);
+      // A weak, diffuse answer: 0.4 on the choice, the rest spread out, low confidence.
+      const probabilities = Object.fromEntries([[choice, 0.4], ...others.map((key) => [key, 0.6 / others.length])]);
+      return { ...answer(request, choice), probabilities, confidence: 0.1 };
+    }) });
+    expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+    expect(fixture.actions.type).toHaveBeenCalledExactlyOnceWith({ id: 'name' }, 'Ada');
+  });
+
+  it('gives acting decisions the step history and keeps it out of the completion check', async () => {
+    const fixture = context({ params: { name: 'Ada' } });
+    const requests: DecisionRequest[] = [];
+    let turn = 0;
+    const executor = decisionExecutor({ model: model(async (request) => {
+      requests.push(request);
+      return answer(request, turn++ === 0 ? actionChoice(request, 'type', 'Ada') : turn === 2 ? 'complete' : 'holds');
+    }) });
+    expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+    expect(requests[0]?.state).not.toHaveProperty('history');
+    expect(requests[1]?.state).toMatchObject({ history: [expect.stringMatching(/^type .*"Ada".*\(completed\)$/)] });
+    expect(requests[2]?.state).not.toHaveProperty('history');
+  });
+
+  it('blocks an oscillation between two actions on the same screen', async () => {
+    const tree = { id: 'root', children: [
+      { id: 'one', role: 'button', name: 'One' }, { id: 'two', role: 'button', name: 'Two' },
+    ] };
+    const fixture = context({ tree });
+    let turn = 0;
+    const executor = decisionExecutor({ model: model(async (request) => answer(request, actionChoice(request, 'tap', turn++ % 2 === 0 ? 'One' : 'Two'))) });
+    expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+    // One, Two, One, Two run; the third One is refused before dispatch.
+    expect(fixture.actions.tap).toHaveBeenCalledTimes(4);
+  });
+
+  it('fails low-confidence assertions under a configured gate instead of approving them', async () => {
     const fixture = context({ kind: 'assert' });
-    const executor = decisionExecutor({ model: model(async (request) => ({ ...answer(request, 'holds'), confidence: 0.1 })) });
+    const executor = decisionExecutor({ model: model(async (request) => ({ ...answer(request, 'holds'), confidence: 0.1 })), ...gated });
     expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'failed', errorCode: 'ASSERTION_INCONCLUSIVE' });
   });
 
@@ -205,8 +248,9 @@ describe('portable decision executor', () => {
   });
 
   it('validates probability and confidence policy at construction', () => {
-    for (const minProbability of [0, 0.5, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minProbability })).toThrow();
+    for (const minProbability of [-1, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minProbability })).toThrow();
     for (const minConfidence of [-1, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minConfidence })).toThrow();
+    expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minProbability: 0, minConfidence: 1 })).not.toThrow();
   });
 
   describe('structured hierarchical decisions', () => {
@@ -224,7 +268,7 @@ describe('portable decision executor', () => {
     }
 
     it('picks the operation then the target and sends structured values', async () => {
-      const fixture = context({ params: { name: 'Ada' } });
+      const fixture = context({ params: { name: 'Ada' }, tree: twoFields });
       const seen: DecisionRequest[] = [];
       const planned = scriptedPlan([() => 'type', (request) => actionTarget(request, 'type', 'Ada'), 'complete', 'holds'], seen);
       const executor = decisionExecutor({ model: planned });
@@ -242,13 +286,13 @@ describe('portable decision executor', () => {
       const fixture = context({ params: { name: 'Ada' } });
       const decide = vi.fn<DecisionModel['decide']>(async (request) => ({ ...answer(request, 'type'), confidence: 0.2 }));
       const structured: DecisionModel = { provider: 'scripted', modelId: 'scripted', structured: true, decide };
-      expect(await decisionExecutor({ model: structured }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+      expect(await decisionExecutor({ model: structured, ...gated }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
       expect(decide).toHaveBeenCalledTimes(1);
       expect(fixture.actions.type).not.toHaveBeenCalled();
     });
 
     it('blocks an uncertain target after a confident operation', async () => {
-      const fixture = context({ params: { name: 'Ada' } });
+      const fixture = context({ params: { name: 'Ada' }, tree: twoFields });
       let turn = 0;
       const decide: DecisionModel['decide'] = async (request) => {
         const choice = 'complete' in request.criteria ? 'type' : actionTarget(request, 'type', 'Ada');
@@ -257,7 +301,7 @@ describe('portable decision executor', () => {
         return turn === 2 ? { ...result, confidence: 0.1 } : result;
       };
       const structured: DecisionModel = { provider: 'scripted', modelId: 'scripted', structured: true, decide };
-      expect(await decisionExecutor({ model: structured }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+      expect(await decisionExecutor({ model: structured, ...gated }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
       expect(turn).toBe(2);
       expect(fixture.actions.type).not.toHaveBeenCalled();
     });
@@ -276,6 +320,25 @@ describe('portable decision executor', () => {
       const planned = scriptedPlan(['holds'], seen);
       expect(await decisionExecutor({ model: planned }).runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
       expect(seen[0]?.instructions).toMatchObject({ goal: expect.any(String) });
+    });
+    it('stops before the target request when the call budget is spent', async () => {
+      const fixture = context({ params: { name: 'Ada' }, tree: twoFields, maxModelCalls: 1 });
+      const seen: DecisionRequest[] = [];
+      const planned = scriptedPlan(['type'], seen);
+      expect(await decisionExecutor({ model: planned }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+      expect(seen).toHaveLength(1);
+      expect(fixture.usage).toHaveLength(1);
+      expect(fixture.actions.type).not.toHaveBeenCalled();
+    });
+
+    it('dispatches a lone target without a one-option question', async () => {
+      const fixture = context({ params: { name: 'Ada' } });
+      const seen: DecisionRequest[] = [];
+      const planned = scriptedPlan(['type', 'complete', 'holds'], seen);
+      expect(await decisionExecutor({ model: planned }).runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+      expect(fixture.actions.type).toHaveBeenCalledExactlyOnceWith({ id: 'name' }, 'Ada');
+      expect(seen).toHaveLength(3);
+      for (const request of seen) expect(Object.keys(request.criteria).length).toBeGreaterThanOrEqual(2);
     });
   });
 });
