@@ -133,7 +133,9 @@ or a distribution that does not sum to one fail with `MODEL_OUTPUT_INVALID`.
 An assertion that contradicts the screen fails with `ASSERTION_FAILED`.
 A low-confidence assertion, incomplete semantic capture, or an explicit
 `inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An uncertain action
-returns a blocked `AUTOMATION_UNSUPPORTED`, before any mutation.
+returns a blocked `AUTOMATION_UNSUPPORTED` before the selected action is
+dispatched; actions from earlier confident decisions in the same step have
+already run.
 
 The executor sends at most `maxModelCalls` requests and keeps each request
 under the step's abort signal. Calls, tokens, latency, and provider/model
@@ -167,6 +169,38 @@ cannot follow a redirect to another endpoint.
 Some compatible endpoints validate strictly and reject the structured `instructions`
 and `criteria` objects the native APIs accept. The executor therefore sends instructions as one labeled string and criteria as a string-valued record: plain strings
 throughout, no nested objects. The native APIs accept this shape too.
+
+## Benchmark: LLM agent vs decision model
+
+The same todo flow runs under two configs against the same app and engine:
+`act drives a multi-action todo flow` in `apps/testbed/tests-agent/act.e2e.ts`
+(add "Buy milk" and "Walk the dog", mark "Buy milk" done, all assertions
+deterministic). One side uses the default agent executor with an LLM, the
+other uses `decisionExecutor`:
+
+- `apps/testbed/e2e.bench-luna.config.ts`: the default executor with luna
+  served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
+- `apps/testbed/e2e.bench-clef.config.ts`: `decisionExecutor` with `clef()`
+  (Clef-flash) from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`.
+
+```bash
+node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1
+CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-clef.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1
+```
+
+![Todo flow end state](/images/bench-todo-flow.png)
+
+### Preliminary result
+
+The rig is validated end to end, but the two headline numbers are still
+pending. Luna is quota-blocked on the OpenCodeX main account (`gpt-6-luna`,
+`gpt-6-luna--fast`, and `gpt-5.6-luna` return HTTP 429) and the routed
+`opencode-go/gpt-6-luna` id speaks none of the HTTP protocols; Clef-flash
+still needs Cloudflare credentials. As a rig check, the same flow passed
+with the healthy `opencode-go/mimo-v2.6-pro` stand-in through the same
+proxy: passed in 24.7s, 6 model calls, 38.5k input tokens at 81% cache.
+`apps/testbed/scripts/opencodex-probe.mjs` probes candidate models without
+spending a full run.
 
 ## Current limits
 
