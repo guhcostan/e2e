@@ -32,7 +32,8 @@ steps. Text, option labels, and typed destinations must come from string
 `params`; secrets stay declared handles filled by the runner. Both
 probability and confidence default to a 0.9 gate. Uncertain actions block,
 and uncertain assertions fail with `ASSERTION_INCONCLUSIVE`. Only bounded
-semantic actions are supported; pixels and generated strings are not.
+semantic actions are supported; generated strings are not. Screenshots may inform
+node choices with `vision: true` on vision models, but pixels add no point actions.
 `waitFor` and `extract` still need an AI SDK model or judge. See the shipped
 `docs/decision-models.mdx` or
 [the online guide](https://e2e.tester.army/docs/decision-models) for setup,

@@ -224,7 +224,8 @@ describe('portable decision executor', () => {
 
   it('attaches masked pixels when vision and the model both allow it', async () => {
     const pixels = { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 1 };
-    const fixture = context({ kind: 'assert', observation: { pixels } });
+    // Only an untainted attempt ever carries pixels; a tainted viewport withholds them.
+    const fixture = context({ kind: 'assert', tainted: false, observation: { pixels } });
     const requests: DecisionRequest[] = [];
     const visionModel: DecisionModel = { provider: 'scripted', modelId: 'scripted', vision: true,
       decide: async (request) => { requests.push(request); return answer(request, 'holds'); } };
@@ -240,7 +241,7 @@ describe('portable decision executor', () => {
       decide: async (request) => { withheldRequests.push(request); return answer(request, 'holds'); } };
     expect(await decisionExecutor({ model: visionModel, vision: true }).runStep(withheld.ctx)).toMatchObject({ status: 'passed' });
     expect(withheldRequests[0]).not.toHaveProperty('images');
-    const textOnly = context({ kind: 'assert', observation: { pixels: { data: new Uint8Array([9]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 } } });
+    const textOnly = context({ kind: 'assert', tainted: false, observation: { pixels: { data: new Uint8Array([9]), mediaType: 'image/png' as const, width: 8, height: 6, scale: 1, maskedRegionCount: 0 } } });
     const textRequests: DecisionRequest[] = [];
     await decisionExecutor({ model: model(async (request) => { textRequests.push(request); return answer(request, 'holds'); }), vision: true }).runStep(textOnly.ctx);
     expect(textOnly.observe).toHaveBeenCalledWith({ tree: false });
