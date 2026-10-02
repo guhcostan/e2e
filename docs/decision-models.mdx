@@ -1,0 +1,204 @@
+---
+title: Decision models
+description: Run bounded actions and assertions with Cloudflare Clef or TypeSafe Jev.
+---
+
+`@e2e-dev/decision` runs `agent.act` and `agent.assert` through the System One
+choice API. Use Cloudflare's [Clef or Clef-flash](https://developers.cloudflare.com/workers-ai/models/clef/),
+TypeSafe's [Jev](https://docs.typesafe.ai/api), or a compatible endpoint.
+The same tests and executor work with either provider.
+
+These models choose between values defined by code. They do not generate
+arbitrary text or implement the AI SDK language-model contract. Configure
+`decisionExecutor` under `executor`; `model` and `judge` on the agents entry
+still take AI SDK language models. The decision package requires no `ai` peer.
+
+## Install and configure
+
+<CodeGroup>
+```bash npm
+npm install -D @e2e-dev/decision
+```
+
+```bash pnpm
+pnpm add -D @e2e-dev/decision
+```
+
+```bash bun
+bun add -d @e2e-dev/decision
+```
+</CodeGroup>
+
+Set `DECISION_PROVIDER` to `clef`, `clef-flash`, or `jev`. Clef needs
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`; Jev needs
+`TYPESAFE_API_KEY`. This example reads these environment variables itself.
+e2e does not load `.env` files.
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { web } from '@e2e-dev/web';
+import { clef, jev, decisionExecutor } from '@e2e-dev/decision';
+
+const provider = process.env.DECISION_PROVIDER ?? 'clef';
+if (!['clef', 'clef-flash', 'jev'].includes(provider)) {
+  throw new Error('DECISION_PROVIDER must be clef, clef-flash, or jev.');
+}
+const model = provider === 'jev'
+  ? jev({ apiKey: process.env.TYPESAFE_API_KEY ?? '' })
+  : clef({
+      accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
+      apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
+      model: provider === 'clef-flash' ? 'clef-flash' : 'clef',
+    });
+
+export default {
+  targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
+  agents: { default: { executor: decisionExecutor({ model }) } },
+} satisfies E2EConfig;
+```
+
+`clef({ model: 'clef-flash', ... })` selects the smaller Cloudflare model.
+`jev({ model: 'jev-1.13.0', ... })` pins a Jev version instead of the default
+`jev-latest`. Check the [TypeSafe model list](https://docs.typesafe.ai/models)
+for available versions.
+
+## Navigate and fill using params
+
+Supply text and destinations in `params`. The executor offers an atomic
+choice for each supported operation on the latest semantic tree. Each
+choice binds its verb, node id, and arguments before the model sees it.
+The model returns the choice id; code dispatches its bound operation through
+`ctx.actions`, where the runner authorizes and records it.
+
+```ts title="tests/todos.e2e.ts"
+import { test, expect } from 'e2e';
+
+test('adds a todo', async ({ app, screen, agent }) => {
+  await app.open();
+  await agent.act('Open {destination}, add a todo named {title}, and verify it is listed.', {
+    params: { destination: '/todos', title: 'Buy coffee' },
+  });
+  await expect(screen.getByTestId('todo')).toContainText('Buy coffee');
+  await agent.assert('The todo list contains Buy coffee.');
+});
+```
+
+The model can tap links without a destination param because their nodes
+are on the current screen. A typed URL or path must come from a string param.
+Values to fill and option labels to select also come from string params.
+An instruction such as "write a greeting" needs a supplied value, for example
+`params: { greeting: 'Hello' }`.
+
+Secret params stay handles. Pass `credentials.user('admin').password` in
+`params` and name that param in the instruction, as with the built-in agent.
+The decision model chooses a declared secret handle and the current field;
+`ctx.actions.typeSecret` checks and fills it. A password never becomes a
+plain-text fill choice. The runner redacts future observations.
+
+| Operation | Arguments offered to the model |
+| --- | --- |
+| Tap | Enabled buttons, links, menu items, tabs, checkboxes, radios, switches, options, and tree items. |
+| Type | An editable node and a string param, excluding password fields. |
+| Type secret | An editable node and a secret declared in this step's params. |
+| Press | An editable node and `Enter`, `Tab`, or `Escape`. |
+| Select | A combobox and a string param containing the option label. |
+| Check | A checkbox, radio, or switch and a boolean state. |
+| Navigate | A URL or path supplied in a string param. |
+| Back | One history step. |
+| Scroll | One viewport screen up or down. |
+| Dismiss keyboard | No arguments, on engines that declare this verb. |
+
+Only verbs the engine declares are offered. Every iteration observes the
+screen again. Choosing `complete` triggers a separate judgment on a fresh
+screen, without action feedback or the prior-step ledger; a model's claim
+that it completed the task cannot pass the step on its own.
+
+## Probability, confidence, and inconclusive results
+
+By default, both the chosen option's probability and the response's
+confidence must reach `0.9`. Configure them separately:
+
+```ts title="Executor setup"
+const executor = decisionExecutor({ model, minProbability: 0.95, minConfidence: 0.85 });
+```
+
+Probability and confidence are different provider fields. A threshold is a
+policy choice; measure accuracy on your own tests before changing it.
+Responses with unknown choices, missing probabilities, out-of-range numbers,
+or a distribution that does not sum to one fail with `MODEL_OUTPUT_INVALID`.
+
+An assertion that contradicts the screen fails with `ASSERTION_FAILED`.
+A low-confidence assertion, incomplete semantic capture, or an explicit
+`inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An uncertain action
+returns a blocked `AUTOMATION_UNSUPPORTED`, before any mutation.
+
+The executor sends at most `maxModelCalls` requests and keeps each request
+under the step's abort signal. Calls, tokens, latency, and provider/model
+provenance enter the report through the executor accounting API. HTTP failures
+use `MODEL_PROVIDER_FAILED`; response bodies and credentials never enter
+error messages. There are no transport retries in this package.
+
+## Compatible endpoints
+
+`systemOne` accepts the full evaluation URL. It sends one `choice` question
+named `decision` and expects the [System One response](https://docs.typesafe.ai/api#response-body).
+Use it for a self-hosted Clef or another compatible service:
+
+```ts title="Local decision model"
+import { systemOne, decisionExecutor } from '@e2e-dev/decision';
+
+const executor = decisionExecutor({
+  model: systemOne({
+    endpoint: 'http://127.0.0.1:8000/v1/systemone',
+    apiKey: process.env.DECISION_API_KEY ?? '',
+    model: 'clef',
+    provider: 'local',
+  }),
+});
+```
+
+Use `envelope: 'cloudflare'` when a service wraps its answer in
+`{ success: true, result: ... }`. HTTP redirects are refused so credentials
+cannot follow a redirect to another endpoint.
+
+Some gateways validate strictly and reject the structured `instructions`
+and `criteria` objects the native API accepts. The executor therefore
+sends both as labeled strings on every request, which the native APIs
+accept too. A gateway that fronts Jev works the same way:
+
+```ts title="Jev through a gateway"
+import { systemOne, decisionExecutor } from '@e2e-dev/decision';
+
+const executor = decisionExecutor({
+  model: systemOne({
+    endpoint: 'https://api-gateway.merge.dev/v1/decisions',
+    apiKey: process.env.MERGE_API_KEY ?? '',
+    model: 'typesafe/jev-1.13',
+    provider: 'merge',
+  }),
+});
+```
+
+## Current limits
+
+- This executor uses semantic text only, including with Clef. Screenshots,
+  canvas-only controls, and image-based targets are not implemented.
+- `agent.waitFor` and `agent.extract` still use the runner's built-in
+  judgment tier. Configure an AI SDK `model` or `judge` for them, or choose
+  a separate LLM agent per call.
+- Every action choice includes its arguments. The API allows 255 choices;
+  two are reserved for `complete` and `unsupported`. A screen and params
+  producing more than 253 operations block the step. Split the flow or
+  reduce the params rather than dropping controls silently.
+- The executor opts out of the trace cache. Every step calls the selected
+  decision model. Assertions do not reuse the acting model's history.
+- A task that cannot conclude within its model-call budget returns
+  `AUTOMATION_UNSUPPORTED`. The runner owns action-budget and timeout errors.
+- Choosing the same action three times without a semantic change blocks the
+  step as `AUTOMATION_UNSUPPORTED`.
+- Drag, upload, hover, arbitrary key sequences, and point actions are not
+  implemented. Use locators or a separate LLM agent for these operations.
+
+The tests exercise the HTTP formats and the built CLI with scripted provider
+responses and real Chromium. They do not establish live Clef or Jev accuracy,
+latency, or pricing.

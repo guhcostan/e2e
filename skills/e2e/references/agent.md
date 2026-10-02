@@ -24,6 +24,20 @@ Subscription logins and local models:
 [setup](setup.md#subscriptions-and-api-keys). Keep `ai@^7` installed with
 any provider.
 
+Clef, Clef-flash, and Jev use the System One decision API. Install
+`@e2e-dev/decision` and put `decisionExecutor({ model: clef({ accountId, apiKey }) })`
+or `decisionExecutor({ model: jev({ apiKey }) })` under `executor`, not the
+agents entry's `model` or `judge`. They can run semantic `act` and `assert`
+steps. Text, option labels, and typed destinations must come from string
+`params`; secrets stay declared handles filled by the runner. Both
+probability and confidence default to a 0.9 gate. Uncertain actions block,
+and uncertain assertions fail with `ASSERTION_INCONCLUSIVE`. Only bounded
+semantic actions are supported; pixels and generated strings are not.
+`waitFor` and `extract` still need an AI SDK model or judge. See the shipped
+`docs/decision-models.mdx` or
+[the online guide](https://e2e.tester.army/docs/decision-models) for setup,
+supported verbs, and the 255-choice limit.
+
 - Pass a model instance, not a string (`INVALID_CONFIG`).
 - An agents entry is one plain object of `model`, `judge`, `system`,
   `context`, `tools`, `maxSteps`, `maxModelCalls`, `judgmentTimeout`,

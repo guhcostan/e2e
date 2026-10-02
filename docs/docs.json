@@ -165,6 +165,7 @@
             "icon": "wand-magic-sparkles",
             "pages": [
               "models",
+              "decision-models",
               "subscriptions",
               "agents",
               "agent-steps",

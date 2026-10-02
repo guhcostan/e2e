@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit --project examples/tsconfig.json"
   },
   "devDependencies": {
+    "@e2e-dev/decision": "workspace:*",
     "@e2e-dev/mobile": "workspace:*",
     "e2e": "workspace:*",
     "@e2e-dev/web": "workspace:*",
