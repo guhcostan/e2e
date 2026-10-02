@@ -1,15 +1,17 @@
 import type { JsonValue } from 'e2e';
 
 /**
- * One bounded choice. Descriptions and instructions are plain strings:
- * some compatible endpoints may reject structured values.
+ * One bounded choice. Flat transports receive plain strings throughout;
+ * structured transports receive objects (instructions as a labeled record,
+ * criteria values as element records). Some compatible endpoints reject
+ * structured values the native APIs accept.
  * The binding of verb, node, and arguments stays in code; the model
- * only ever sees the choice id and its description string.
+ * only ever sees the choice id and its description.
  */
 export interface DecisionRequest {
   readonly state: JsonValue;
-  readonly instructions: string;
-  readonly criteria: Readonly<Record<string, string>>;
+  readonly instructions: JsonValue;
+  readonly criteria: Readonly<Record<string, JsonValue>>;
   readonly signal: AbortSignal;
 }
 
@@ -27,6 +29,12 @@ export interface DecisionResult {
 export interface DecisionModel {
   readonly provider: string;
   readonly modelId: string;
+  /**
+   * Whether the endpoint accepts structured instructions and criteria
+   * values. Native Clef and Jev do; compatible endpoints may not, so they
+   * stay on flat strings unless they opt in.
+   */
+  readonly structured?: boolean;
   decide(request: DecisionRequest): Promise<DecisionResult>;
 }
 
@@ -37,6 +45,8 @@ export interface SystemOneOptions {
   readonly model: string;
   readonly provider: string;
   readonly envelope?: 'direct' | 'cloudflare';
+  /** Set for endpoints that accept structured values, such as Clef and Jev. Defaults to false. */
+  readonly structured?: boolean;
   readonly fetch?: typeof fetch;
 }
 

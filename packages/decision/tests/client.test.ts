@@ -89,4 +89,22 @@ describe('System One transports', () => {
       expect(() => systemOne({ endpoint, model: 'local', provider: 'local', apiKey: 'test' })).toThrow('HTTP or HTTPS');
     }
   });
+
+  it('passes structured values through untouched for native transports', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    const criteria = { a0: { element: 'tap button "Add" [n28]' } };
+    await systemOne({
+      endpoint: 'https://example.test/v1/systemone', model: 'clef', provider: 'test',
+      apiKey: 'credential', structured: true, fetch: transport,
+    }).decide({ state: { screen: 'Ready' }, instructions: { goal: 'Do it' }, criteria, signal: request.signal });
+    expect(JSON.parse(String(transport.mock.calls[0]?.[1]?.body)).questions.decision).toEqual({
+      type: 'choice', instructions: { goal: 'Do it' }, criteria,
+    });
+  });
+
+  it('marks the native transports as structured and leaves compatibles flat', () => {
+    expect(clef({ accountId: 'test', apiKey: 'credential' }).structured).toBe(true);
+    expect(jev({ apiKey: 'credential' }).structured).toBe(true);
+    expect(systemOne({ endpoint: 'https://example.test', model: 'm', provider: 'p', apiKey: 'k' }).structured).toBeUndefined();
+  });
 });

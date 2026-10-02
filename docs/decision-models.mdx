@@ -111,7 +111,11 @@ plain-text fill choice. The runner redacts future observations.
 | Dismiss keyboard | No arguments, on engines that declare this verb. |
 
 Only verbs the engine declares are offered. Every iteration observes the
-screen again. Choosing `complete` triggers a separate judgment on a fresh
+screen again. On structured transports (Clef, Jev) each iteration asks two
+narrower questions instead of one flat choice: first the operation (`type`,
+`tap`, `complete`, `unsupported`, and the rest), then the target within the
+chosen operation. Flat transports keep the single choice with string
+criteria. Choosing `complete` triggers a separate judgment on a fresh
 screen, without action feedback or the prior-step ledger; a model's claim
 that it completed the task cannot pass the step on its own. When that verification is inconclusive,
 the act step blocks instead of failing an assertion.
@@ -196,12 +200,15 @@ Five `--no-cache` runs per row on the same machine, so every repetition
 spends real model calls. Small N: treat this as a smoke comparison, not a
 measurement.
 
-| Side | Model | Gates | Completed | Wall (mean) | Calls / run | Input tokens / run |
+| Side | Model | Shape · gates | Completed | Wall (mean) | Calls / run | Input tokens / run |
 | --- | --- | --- | --- | --- | --- | --- |
 | LLM agent | `gpt-6-luna` via OpenCodeX | - | 5/5 | 14.9s | 5.6 | ~25k |
-| Decision model | `clef-flash` via Cloudflare | 0.9 / 0.9 | 0/5 | ~1s | 1 | ~1.5k |
-| Decision model | `clef-flash` via Cloudflare | 0.6 / 0.5 | 0/5 | ~1.5s | 2 | ~3.4k |
-| Decision model | `clef-flash` via Cloudflare | 0.51 / 0.3 | 0/5 | ~1.5s | 2 | ~3.4k |
+| Decision model | `clef-flash` via Cloudflare | flat · 0.9 / 0.9 | 0/5 | ~1s | 1 | ~1.5k |
+| Decision model | `clef-flash` via Cloudflare | flat · 0.6 / 0.5 | 0/5 | ~1.5s | 2 | ~3.4k |
+| Decision model | `clef-flash` via Cloudflare | flat · 0.51 / 0.3 | 0/5 | ~1.5s | 2 | ~3.4k |
+| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.9 / 0.9 | 0/5, op1 at 0.909 / 0.802 | ~1s | 1 | ~1.5k |
+| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.8 | 0/5, target1 at 0.940 / 0.775 | ~1.2s | 2 | ~1.5k |
+| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.75 | 0/5, op2 at 0.451 / 0.173 | ~2s | 3 | ~2.3k |
 
 The decision rows all block on uncertainty, never on a wrong action: the
 unparametrized flow offers no type choice at all (values only come from
@@ -211,15 +218,15 @@ probability 0.747 / confidence 0.558, executes it under calibrated gates,
 then stalls on the second decision at 0.448 / 0.307 — below the 0.5 floor
 the executor itself enforces.
 
-The shape of the question moves confidence more than the gates do.
-Replaying the same screen against clef-flash three ways shows it: the flat
-30-way choice with string instructions answers `a22` at 0.756 / 0.571
-(reproducing the live run), while a hierarchical structured ask in the
-jev-ultrafast style answers the operation (`type_text`) at 0.921 / 0.813
-and the target within it at 0.971 / 0.889. Same model, same screen —
-narrower questions with structured values take confidence from 0.57 to
-0.89. Completing flows like this wants that shape (pick the verb, then
-the target) rather than lower gates.
+The shape of the question moves confidence more than the gates do. The
+hierarchical executor now asks the operation first and the target within
+it, with structured values on native transports. Against the live flow
+that takes the first operation from 0.747 / 0.558 to 0.909 / 0.802 and
+the first target to 0.940 / 0.775 — the right choices, still under the
+0.9 defaults. The second operation then diffuses at 0.451 / 0.173 across
+several plausible continuations (submit, press Enter, keep typing), which
+no gate setting can honestly resolve: that branch point wants richer
+framing, not lower thresholds.
 
 `apps/testbed/scripts/opencodex-probe.mjs` probes candidate OpenCodeX
 models without spending a full run.

@@ -6,6 +6,8 @@ import type { ExecutorNode, StepExecutorContext } from 'e2e';
  * text; `run` dispatches the bound operation, never parsed model output.
  */
 export interface Candidate {
+  /** The operation this choice performs; the executor groups by it for hierarchical decisions. */
+  readonly verb: string;
   readonly description: string;
   run(): Promise<void>;
 }
@@ -27,7 +29,7 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
     if (!node.states?.disabled && !node.states?.hidden) {
       const target = { id: node.id };
       if (ctx.target.verbs.has('tap') && tappable.has(node.role ?? '')) {
-        result.push({ description: `tap ${label(node)}`, run: () => ctx.actions.tap(target) });
+        result.push({ verb: 'tap', description: `tap ${label(node)}`, run: () => ctx.actions.tap(target) });
       }
       const readonlyAttr = node.attributes?.['readonly'];
       const ariaReadonly = node.attributes?.['aria-readonly'];
@@ -35,27 +37,27 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
         if (node.inputPurpose !== 'password' && !node.states?.secure && ctx.target.verbs.has('type')) {
           for (const [param, value] of values) {
             if (node.value !== value) {
-              result.push({ description: `type param ${JSON.stringify(param)} (${JSON.stringify(value)}) into ${label(node)}`, run: () => ctx.actions.type(target, value) });
+              result.push({ verb: 'type', description: `type param ${JSON.stringify(param)} (${JSON.stringify(value)}) into ${label(node)}`, run: () => ctx.actions.type(target, value) });
             }
           }
         }
         if (secretEditable.has(node.role ?? '') && ctx.target.verbs.has('typeSecret')) {
           for (const secret of ctx.step.secrets) {
             if (secret.purpose !== 'password' || node.inputPurpose === 'password') {
-              result.push({ description: `typeSecret ${JSON.stringify(secret.name)} into ${label(node)}`, run: () => ctx.actions.typeSecret(target, secret.name) });
+              result.push({ verb: 'typeSecret', description: `typeSecret ${JSON.stringify(secret.name)} into ${label(node)}`, run: () => ctx.actions.typeSecret(target, secret.name) });
             }
           }
         }
         if (ctx.target.verbs.has('press')) {
           for (const key of ['Enter', 'Tab', 'Escape']) {
-            result.push({ description: `press ${JSON.stringify(key)} on ${label(node)}`, run: () => ctx.actions.press(target, key) });
+            result.push({ verb: 'press', description: `press ${JSON.stringify(key)} on ${label(node)}`, run: () => ctx.actions.press(target, key) });
           }
         }
       }
       if (ctx.target.verbs.has('check') && ['checkbox', 'radio', 'switch'].includes(node.role ?? '')) {
         for (const checked of [true, false]) {
           if (node.states?.checked !== checked) {
-            result.push({ description: `check ${label(node)} as ${checked ? 'checked' : 'unchecked'}`, run: () => ctx.actions.check(target, checked) });
+            result.push({ verb: 'check', description: `check ${label(node)} as ${checked ? 'checked' : 'unchecked'}`, run: () => ctx.actions.check(target, checked) });
           }
         }
       }
@@ -64,7 +66,7 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
           // An empty label is no choice: the runner rejects it with
           // INVALID_ARGUMENT and aborts the step instead of re-aiming.
           if (value === '') continue;
-          result.push({ description: `select param ${JSON.stringify(param)} (${JSON.stringify(value)}) in ${label(node)}`, run: () => ctx.actions.select(target, value) });
+          result.push({ verb: 'select', description: `select param ${JSON.stringify(param)} (${JSON.stringify(value)}) in ${label(node)}`, run: () => ctx.actions.select(target, value) });
         }
       }
     }
@@ -76,15 +78,15 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
       // A blank destination is no choice: the runner rejects it with
       // INVALID_ARGUMENT and aborts the step instead of re-aiming.
       if (url.trim() === '') continue;
-      result.push({ description: `navigate to param ${JSON.stringify(param)} (${JSON.stringify(url)})`, run: () => ctx.actions.navigate(url) });
+      result.push({ verb: 'navigate', description: `navigate to param ${JSON.stringify(param)} (${JSON.stringify(url)})`, run: () => ctx.actions.navigate(url) });
     }
   }
-  if (ctx.target.verbs.has('back')) result.push({ description: 'back one step in history', run: () => ctx.actions.back() });
+  if (ctx.target.verbs.has('back')) result.push({ verb: 'back', description: 'back one step in history', run: () => ctx.actions.back() });
   if (ctx.target.verbs.has('scroll')) {
-    for (const direction of ['up', 'down'] as const) result.push({ description: `scroll viewport ${direction}`, run: () => ctx.actions.scroll(direction) });
+    for (const direction of ['up', 'down'] as const) result.push({ verb: 'scroll', description: `scroll viewport ${direction}`, run: () => ctx.actions.scroll(direction) });
   }
   if (ctx.target.verbs.has('dismissKeyboard')) {
-    result.push({ description: 'dismissKeyboard', run: () => ctx.actions.dismissKeyboard() });
+    result.push({ verb: 'dismissKeyboard', description: 'dismissKeyboard', run: () => ctx.actions.dismissKeyboard() });
   }
   return result;
 }

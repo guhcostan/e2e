@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentError } from 'e2e';
 import { decisionExecutor } from '../src/index.ts';
 import type { DecisionModel, DecisionRequest, DecisionResult } from '../src/index.ts';
-import { actionChoice, answer, context } from './helpers.ts';
+import { actionChoice, actionTarget, answer, context, offersPrefix } from './helpers.ts';
 
 /** A transport whose decisions are controlled by the test. */
 function model(decide: DecisionModel['decide']): DecisionModel {
@@ -142,11 +142,10 @@ describe('portable decision executor', () => {
         { id: 'disabled', role: 'button', name: 'Disabled', states: { disabled: true } },
       ] } });
     const executor = decisionExecutor({ model: model(async (request) => {
-      const descriptions = Object.values(request.criteria);
-      expect(descriptions.some((description) => description.startsWith('type '))).toBe(false);
-      expect(descriptions.some((description) => description.startsWith('typeSecret '))).toBe(true);
-      expect(JSON.stringify(descriptions)).not.toContain('Hidden');
-      expect(JSON.stringify(descriptions)).not.toContain('Disabled');
+      expect(offersPrefix(request, 'type ')).toBe(false);
+      expect(offersPrefix(request, 'typeSecret ')).toBe(true);
+      expect(JSON.stringify(request.criteria)).not.toContain('Hidden');
+      expect(JSON.stringify(request.criteria)).not.toContain('Disabled');
       return answer(request, 'unsupported');
     }) });
     expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked' });
@@ -156,13 +155,13 @@ describe('portable decision executor', () => {
     const combo = { id: 'root', children: [{ id: 'combo', role: 'combobox', name: 'Combo' }] };
     const selecting = context({ params: { label: '' }, tree: combo });
     const selectingExecutor = decisionExecutor({ model: model(async (request) => {
-      expect(Object.values(request.criteria).some((description) => description.startsWith('select '))).toBe(false);
+      expect(offersPrefix(request, 'select ')).toBe(false);
       return answer(request, 'unsupported');
     }) });
     expect(await selectingExecutor.runStep(selecting.ctx)).toMatchObject({ status: 'blocked' });
     const navigating = context({ params: { destination: '   ' }, tree: combo });
     const navigatingExecutor = decisionExecutor({ model: model(async (request) => {
-      expect(Object.values(request.criteria).some((description) => description.startsWith('navigate '))).toBe(false);
+      expect(offersPrefix(request, 'navigate ')).toBe(false);
       return answer(request, 'unsupported');
     }) });
     expect(await navigatingExecutor.runStep(navigating.ctx)).toMatchObject({ status: 'blocked' });
@@ -208,5 +207,75 @@ describe('portable decision executor', () => {
   it('validates probability and confidence policy at construction', () => {
     for (const minProbability of [0, 0.5, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minProbability })).toThrow();
     for (const minConfidence of [-1, 2, NaN]) expect(() => decisionExecutor({ model: model(async (request) => answer(request, 'holds')), minConfidence })).toThrow();
+  });
+
+  describe('structured hierarchical decisions', () => {
+    type PlannedStep = string | ((request: DecisionRequest) => string);
+    function scriptedPlan(plan: PlannedStep[], seen: DecisionRequest[]): DecisionModel {
+      let turn = 0;
+      return {
+        provider: 'scripted', modelId: 'scripted', structured: true,
+        decide: async (request) => {
+          seen.push(request);
+          const step = plan[turn++] ?? 'unsupported';
+          return answer(request, typeof step === 'string' ? step : step(request));
+        },
+      };
+    }
+
+    it('picks the operation then the target and sends structured values', async () => {
+      const fixture = context({ params: { name: 'Ada' } });
+      const seen: DecisionRequest[] = [];
+      const planned = scriptedPlan([() => 'type', (request) => actionTarget(request, 'type', 'Ada'), 'complete', 'holds'], seen);
+      const executor = decisionExecutor({ model: planned });
+      expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+      expect(fixture.actions.type).toHaveBeenCalledExactlyOnceWith({ id: 'name' }, 'Ada');
+      expect(seen).toHaveLength(4);
+      expect(seen[0]?.instructions).toMatchObject({ goal: expect.any(String) });
+      expect(seen[0]?.criteria['type']).toBe('Enter text into a field using a declared param value.');
+      expect(typeof seen[1]?.instructions).toBe('object');
+      for (const value of Object.values(seen[1]?.criteria ?? {})) expect(value).toMatchObject({ element: expect.any(String) });
+      expect(fixture.usage).toHaveLength(4);
+    });
+
+    it('blocks an uncertain operation before asking for a target', async () => {
+      const fixture = context({ params: { name: 'Ada' } });
+      const decide = vi.fn<DecisionModel['decide']>(async (request) => ({ ...answer(request, 'type'), confidence: 0.2 }));
+      const structured: DecisionModel = { provider: 'scripted', modelId: 'scripted', structured: true, decide };
+      expect(await decisionExecutor({ model: structured }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+      expect(decide).toHaveBeenCalledTimes(1);
+      expect(fixture.actions.type).not.toHaveBeenCalled();
+    });
+
+    it('blocks an uncertain target after a confident operation', async () => {
+      const fixture = context({ params: { name: 'Ada' } });
+      let turn = 0;
+      const decide: DecisionModel['decide'] = async (request) => {
+        const choice = 'complete' in request.criteria ? 'type' : actionTarget(request, 'type', 'Ada');
+        const result = answer(request, choice);
+        turn += 1;
+        return turn === 2 ? { ...result, confidence: 0.1 } : result;
+      };
+      const structured: DecisionModel = { provider: 'scripted', modelId: 'scripted', structured: true, decide };
+      expect(await decisionExecutor({ model: structured }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
+      expect(turn).toBe(2);
+      expect(fixture.actions.type).not.toHaveBeenCalled();
+    });
+
+    it('blocks an unsupported operation without asking for a target', async () => {
+      const fixture = context({ params: { name: 'Ada' } });
+      const seen: DecisionRequest[] = [];
+      const planned = scriptedPlan(['unsupported'], seen);
+      expect(await decisionExecutor({ model: planned }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked' });
+      expect(seen).toHaveLength(1);
+    });
+
+    it('judges assertions from structured instructions', async () => {
+      const fixture = context({ kind: 'assert' });
+      const seen: DecisionRequest[] = [];
+      const planned = scriptedPlan(['holds'], seen);
+      expect(await decisionExecutor({ model: planned }).runStep(fixture.ctx)).toMatchObject({ status: 'passed' });
+      expect(seen[0]?.instructions).toMatchObject({ goal: expect.any(String) });
+    });
   });
 });

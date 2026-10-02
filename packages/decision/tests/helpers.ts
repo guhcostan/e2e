@@ -17,14 +17,33 @@ export function answer(request: DecisionRequest, choice: string): DecisionResult
  * `type` never matches `typeSecret`.
  */
 export function actionChoice(request: DecisionRequest, action: string, value?: string): string {
-  const entry = Object.entries(request.criteria).find(([, description]) =>
+  const flat: Record<string, string> = {};
+  for (const [key, candidate] of Object.entries(request.criteria)) if (typeof candidate === 'string') flat[key] = candidate;
+  const entry = Object.entries(flat).find(([, description]) =>
     (description === action || description.startsWith(`${action} `)) &&
     (value === undefined || description.includes(JSON.stringify(value))));
   if (!entry) throw new Error(`No ${action} choice was offered.`);
   return entry[0];
 }
 
-/** Complete executor context for safety and accounting tests. */
+/** Whether any string-valued criterion starts with the prefix. */
+export function offersPrefix(request: DecisionRequest, prefix: string): boolean {
+  return Object.values(request.criteria).some((value) => typeof value === 'string' && value.startsWith(prefix));
+}
+
+/** Finds a hierarchical target by its verb and declared arguments. */
+export function actionTarget(request: DecisionRequest, action: string, value?: string): string {
+  const entry = Object.entries(request.criteria).find(([, criterion]) => {
+    if (typeof criterion !== 'object' || criterion === null || Array.isArray(criterion)) return false;
+    const element = (criterion as Record<string, JsonValue>)['element'];
+    return typeof element === 'string' &&
+      (element === action || element.startsWith(action + ' ')) &&
+      (value === undefined || element.includes(JSON.stringify(value)));
+  });
+  if (!entry) throw new Error('No ' + action + ' target was offered.');
+  return entry[0];
+}
+
 export function context(options: {
   kind?: 'act' | 'assert'; params?: Readonly<Record<string, JsonValue>>;
   tree?: ExecutorNode; maxModelCalls?: number; observation?: Partial<ExecutorObservation>;

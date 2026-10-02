@@ -1,5 +1,6 @@
 import { AgentError } from 'e2e/agent';
 import { z } from 'zod';
+import type { JsonValue } from 'e2e';
 import type { ClefOptions, DecisionModel, DecisionResult, JevOptions, SystemOneOptions } from './types.ts';
 
 const probability = z.number().min(0).max(1);
@@ -25,6 +26,7 @@ export function systemOne(options: SystemOneOptions): DecisionModel {
   return {
     provider: options.provider,
     modelId: options.model,
+    ...(options.structured === undefined ? {} : { structured: options.structured }),
     async decide(request) {
       if (!options.apiKey) throw new AgentError('MODEL_UNAVAILABLE', 'Set the decision provider API key.');
       request.signal.throwIfAborted();
@@ -84,6 +86,7 @@ export function clef(options: ClefOptions): DecisionModel {
     apiKey: options.apiKey,
     model,
     envelope: 'cloudflare',
+    structured: true,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }
@@ -95,12 +98,15 @@ export function jev(options: JevOptions): DecisionModel {
     endpoint: 'https://api.typesafe.ai/v1/systemone',
     apiKey: options.apiKey,
     model: options.model ?? 'jev-latest',
+    // The TypeSafe API accepts structured instructions and criteria values.
+    structured: true,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }
 
 /** Validates custom transports too; a malformed or out-of-domain answer never authorizes an action. */
-export function validateDecision(result: DecisionResult, criteria: Readonly<Record<string, string>>): void {
+/** Validates custom transports too; a malformed or out-of-domain answer never authorizes an action. Only the choice ids matter, so flat and structured criteria validate the same way. */
+export function validateDecision(result: DecisionResult, criteria: Readonly<Record<string, JsonValue>>): void {
   const invalid = () => new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
   if (result === null || typeof result !== 'object') throw invalid();
   const probabilities = (result as { probabilities?: unknown }).probabilities;
