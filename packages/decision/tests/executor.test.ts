@@ -103,6 +103,23 @@ describe('portable decision executor', () => {
     expect(requests[2]?.state).not.toHaveProperty('history');
   });
 
+  it('sends a bounded, clipped history on long steps', async () => {
+    const names = Array.from({ length: 11 }, (_, index) => 'Button ' + index + ' ' + 'x'.repeat(400));
+    const fixture = context({ tree: { id: 'root', children: names.map((name, index) => ({ id: 'b' + index, role: 'button', name })) } });
+    const requests: DecisionRequest[] = [];
+    let turn = 0;
+    const executor = decisionExecutor({ model: model(async (request) => {
+      requests.push(request);
+      const index = turn++;
+      return answer(request, index < 22 ? actionChoice(request, 'tap', names[index % 11]) : 'unsupported');
+    }) });
+    expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked' });
+    const last = requests.at(-1)?.state as { history?: string[] } | undefined;
+    const history = last?.history ?? [];
+    expect(history).toHaveLength(20);
+    for (const entry of history) expect(entry.length).toBeLessThanOrEqual(240);
+  });
+
   it('blocks an oscillation between two actions on the same screen', async () => {
     const tree = { id: 'root', children: [
       { id: 'one', role: 'button', name: 'One' }, { id: 'two', role: 'button', name: 'Two' },

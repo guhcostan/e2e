@@ -130,16 +130,32 @@ export function validateDecision(result: DecisionResult, criteria: Readonly<Reco
   const values = keys.map((key) => distribution[key]);
   const decimals = result.probabilityDecimals;
   if (decimals !== undefined && (!Number.isInteger(decimals) || decimals < 0 || decimals > 15)) throw invalid();
-  // Half a unit in the last place per rounded probability, accumulated over the sum.
-  const tolerance = 0.001 + (decimals === undefined ? 0 : keys.length * 0.5 * 10 ** -decimals);
   const valid = typeof result.choice === 'string' &&
     Object.hasOwn(criteria, result.choice) &&
     Object.keys(distribution).length === keys.length &&
     Object.keys(distribution).every((key) => Object.hasOwn(criteria, key)) &&
     values.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) &&
     Number.isFinite(result.confidence) && result.confidence >= 0 && result.confidence <= 1;
-  if (!valid || Math.abs(values.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 1) > tolerance ||
+  if (!valid || !sumsToOne(values as number[], decimals) ||
     distribution[result.choice] !== Math.max(...values.map((value) => value ?? 0))) {
     throw new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
   }
+}
+
+/**
+ * Whether the distribution can sum to 1. A value rounded to `decimals` places
+ * stands for a true probability within half a unit of it, clipped to [0, 1],
+ * so 1 must lie between the sums of those interval bounds; a summed
+ * tolerance alone would admit impossible distributions such as two options
+ * at 1 once the option count is large.
+ */
+function sumsToOne(values: readonly number[], decimals: number | undefined): boolean {
+  const half = decimals === undefined ? 0 : 0.5 * 10 ** -decimals;
+  let lower = 0;
+  let upper = 0;
+  for (const value of values) {
+    lower += Math.max(0, value - half);
+    upper += Math.min(1, value + half);
+  }
+  return lower - 0.001 <= 1 && upper + 0.001 >= 1;
 }

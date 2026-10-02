@@ -57,6 +57,16 @@ describe('System One transports', () => {
     expect(() => validateDecision(broken, criteria)).toThrow();
   });
 
+  it('rejects an impossible rounded distribution however many options there are', () => {
+    const keys = Array.from({ length: 250 }, (_, index) => 'a' + index);
+    const criteria = Object.fromEntries(keys.map((key) => [key, key]));
+    // Two options at 1 cannot both hold, even though 250 half-units of slack exceed the excess.
+    const probabilities = Object.fromEntries(keys.map((key, index) => [key, index < 2 ? 1 : 0]));
+    expect(() => validateDecision({ choice: 'a0', probabilities, confidence: 1, modelId: 'm', probabilityDecimals: 2 }, criteria)).toThrow();
+    const spread = Object.fromEntries(keys.map((key, index) => [key, index === 0 ? 0.5 : 0.002]));
+    expect(() => validateDecision({ choice: 'a0', probabilities: spread, confidence: 1, modelId: 'm', probabilityDecimals: 2 }, criteria)).not.toThrow();
+  });
+
   it.each([401, 429, 529])('reports HTTP %s without response content', async (status) => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response('credential and secret', { status }));
     const operation = jev({ apiKey: 'credential', fetch: transport }).decide(request);

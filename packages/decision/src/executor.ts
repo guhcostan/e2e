@@ -12,6 +12,15 @@ import { fromEvaluationModel, isEvaluationModel } from './evaluation.ts';
 function pixelsImage(pixels: { data: Uint8Array; mediaType: string }): readonly string[] {
   return ['data:' + pixels.mediaType + ';base64,' + Buffer.from(pixels.data).toString('base64')];
 }
+
+/** The most recent actions a decision sees, each clipped, so long steps and large params stay within request limits. */
+const historyLimit = 20;
+const historyEntryLimit = 240;
+
+/** Bounds the step history sent with a decision. */
+function recentHistory(history: readonly string[]): string[] {
+  return history.slice(-historyLimit).map((entry) => entry.length > historyEntryLimit ? entry.slice(0, historyEntryLimit - 1) + '…' : entry);
+}
 import type { DecisionExecutorOptions, DecisionResult } from './types.ts';
 
 const judgment = {
@@ -74,7 +83,7 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
           result = await model.decide({
             // History lists this step's earlier actions, so the model can tell
             // which params it already used; judgments never receive it.
-            state: { screen: observation.text, path: observation.path ?? '', feedback, ...(history.length === 0 ? {} : { history: [...history] }) },
+            state: { screen: observation.text, path: observation.path ?? '', feedback, ...(history.length === 0 ? {} : { history: recentHistory(history) }) },
             ...(useVision && observation.pixels ? { images: pixelsImage(observation.pixels) } : {}),
             instructions: structured
               ? {

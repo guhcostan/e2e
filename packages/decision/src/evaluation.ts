@@ -35,8 +35,10 @@ export function evaluationModel(model: DecisionModel): EvaluationModelV4 {
       if (questions.some(([, question]) => question.type !== 'choice')) {
         throw new AgentError('MODEL_OUTPUT_INVALID', 'The ' + model.modelId + ' evaluation model answers choice questions only.');
       }
-      const answers: EvaluationModelV4Result['answers'] = {};
-      const confidence: Record<string, number> = {};
+      // Question ids are caller data: null-prototype maps keep an id such as
+      // __proto__ an own entry instead of rewriting the prototype.
+      const answers: EvaluationModelV4Result['answers'] = Object.create(null) as EvaluationModelV4Result['answers'];
+      const confidence: Record<string, number> = Object.create(null) as Record<string, number>;
       let inputTokens: number | undefined = 0;
       let outputTokens: number | undefined = 0;
       let decimals: number | undefined;
@@ -165,7 +167,7 @@ function reportedConfidence(metadata: EvaluationModelV4Result['providerMetadata'
 
 /** Choice descriptions pass through; flat transports need plain strings. */
 function toCriteria(criteria: ChoiceQuestion['criteria'], structured: boolean): Record<string, JsonValue> {
-  const mapped: Record<string, JsonValue> = {};
+  const mapped: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
   for (const [key, value] of Object.entries(criteria)) {
     mapped[key] = structured || typeof value === 'string' ? value as JsonValue : value === null ? '' : JSON.stringify(value) ?? '';
   }

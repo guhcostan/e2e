@@ -14,9 +14,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": { "zod": "4.6.1" },
-  "peerDependencies": { "@ai-sdk/provider": "^4.0.0", "ai": "^7.0.0", "e2e": ">=0.15.2 <1" },
-  "peerDependenciesMeta": { "@ai-sdk/provider": { "optional": true }, "ai": { "optional": true } },
+  "dependencies": { "@ai-sdk/provider": "4.0.18", "zod": "4.6.1" },
+  "peerDependencies": { "ai": "^7.0.0", "e2e": ">=0.15.2 <1" },
+  "peerDependenciesMeta": { "ai": { "optional": true } },
   "devDependencies": {
     "e2e": "workspace:*",
     "@e2e-dev/web": "workspace:*",
@@ -25,7 +25,6 @@
     "vitest": "5.0.1",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "@ai-sdk/provider": "4.0.18",
     "@ai-sdk/typesafe-ai": "3.0.12",
     "ai": "7.0.107"
   },

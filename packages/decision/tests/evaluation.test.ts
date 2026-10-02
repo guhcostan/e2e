@@ -116,6 +116,20 @@ describe('AI SDK evaluation model', () => {
     await evaluated.doEvaluate({ state: 'text', questions: { department: question }, abortSignal: controller.signal });
     expect(seen[0]).toBe(controller.signal);
   });
+
+  it('keeps __proto__ question and choice ids as own entries', async () => {
+    const seen: DecisionRequest[] = [];
+    const evaluated = evaluationModel(transport(async (request) => {
+      seen.push(request);
+      return answer(request, '__proto__');
+    }, { structured: true }));
+    const questions = JSON.parse('{"__proto__": {"type": "choice", "instructions": "pick", "criteria": {"__proto__": "first", "other": "second"}}}') as Record<string, typeof question>;
+    const result = await evaluated.doEvaluate({ state: 'text', questions });
+    expect(Object.keys(seen[0]?.criteria ?? {})).toEqual(['__proto__', 'other']);
+    expect(Object.hasOwn(result.answers, '__proto__')).toBe(true);
+    expect(result.answers['__proto__']).toMatchObject({ type: 'choice', choice: '__proto__' });
+    expect(Object.hasOwn(result.providerMetadata?.scripted?.['confidence'] as object, '__proto__')).toBe(true);
+  });
 });
 
 /** A hand-written AI SDK evaluation model whose one answer the test controls. */
