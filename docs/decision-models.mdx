@@ -192,19 +192,20 @@ CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/c
 
 ### Results
 
-Same machine, `--no-cache` so every step spends real model calls. Small N:
-treat the timings as a smoke comparison, not a measurement.
+Five `--no-cache` runs each on the same machine, so every repetition spends
+real model calls. Small N: treat this as a smoke comparison, not a
+measurement.
 
-| Side | Model | Result | Wall time | Model calls | Tokens in/out |
-| --- | --- | --- | --- | --- | --- |
-| LLM agent | `gpt-6-luna` via OpenCodeX | passed | 23s | 6 | 26,872 / 168 |
-| Decision model | `clef-flash` via Cloudflare | blocked, uncertain (2/2 runs) | 1.5s | 1 | 1,543 / 0 |
+| Side | Model | Completed | Blocked / failed | Wall (mean) | Model calls / run | Input tokens / run |
+| --- | --- | --- | --- | --- | --- | --- |
+| LLM agent | `gpt-6-luna` via OpenCodeX | 5/5 | 0 | 14.1s | 5.6 | ~25k |
+| Decision model | `clef-flash` via Cloudflare | 0/5 | 5 blocked, uncertain | ~1s | 1 | ~1.5k |
 
-Clef-flash answered both runs identically (choice `a25`, probability 0.619,
-confidence 0.387) and the executor blocked before any mutation: both gates
-default to 0.9, so an uncertain first action never runs. The LLM side took
-longer and spent ~17x more input tokens to finish the flow; the decision
-side answered in about a second and refused to act on a guess.
+Clef-flash answered all five runs identically (choice `a25`, probability
+0.619, confidence 0.387) and the executor blocked before any mutation: both
+gates default to 0.9, so an uncertain first action never runs. The LLM side
+completed every run in 12–16s at ~25k input tokens each; the decision side
+answered in about a second per run and refused to act on a guess.
 
 `apps/testbed/scripts/opencodex-probe.mjs` probes candidate OpenCodeX
 models without spending a full run.
