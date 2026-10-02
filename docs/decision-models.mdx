@@ -160,7 +160,8 @@ A compatible endpoint receives images only when built with `vision: true`.
 
 Pixels degrade instead of failing the step. When the engine withholds them, or
 after a secret fill taints the viewport, the step decides from semantic text
-alone. Vision raises cost and latency on every model call, and point actions
+alone. Calls that actually carry a screenshot cost more and run longer than
+text-only calls; withheld or tainted viewports send none. Point actions
 stay unimplemented: pixels inform which node choice to pick, they add no new
 action vocabulary.
 
