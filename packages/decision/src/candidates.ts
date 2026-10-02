@@ -61,6 +61,9 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
       }
       if (ctx.target.verbs.has('select') && node.role === 'combobox') {
         for (const [param, value] of values) {
+          // An empty label is no choice: the runner rejects it with
+          // INVALID_ARGUMENT and aborts the step instead of re-aiming.
+          if (value === '') continue;
           result.push({ description: `select param ${JSON.stringify(param)} (${JSON.stringify(value)}) in ${label(node)}`, run: () => ctx.actions.select(target, value) });
         }
       }
@@ -70,6 +73,9 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
   visit(tree);
   if (ctx.target.verbs.has('navigate')) {
     for (const [param, url] of values) {
+      // A blank destination is no choice: the runner rejects it with
+      // INVALID_ARGUMENT and aborts the step instead of re-aiming.
+      if (url.trim() === '') continue;
       result.push({ description: `navigate to param ${JSON.stringify(param)} (${JSON.stringify(url)})`, run: () => ctx.actions.navigate(url) });
     }
   }

@@ -152,6 +152,21 @@ describe('portable decision executor', () => {
     expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked' });
   });
 
+  it('omits empty select labels and blank destinations', async () => {
+    const combo = { id: 'root', children: [{ id: 'combo', role: 'combobox', name: 'Combo' }] };
+    const selecting = context({ params: { label: '' }, tree: combo });
+    const selectingExecutor = decisionExecutor({ model: model(async (request) => {
+      expect(Object.values(request.criteria).some((description) => description.startsWith('select '))).toBe(false);
+      return answer(request, 'unsupported');
+    }) });
+    expect(await selectingExecutor.runStep(selecting.ctx)).toMatchObject({ status: 'blocked' });
+    const navigating = context({ params: { destination: '   ' }, tree: combo });
+    const navigatingExecutor = decisionExecutor({ model: model(async (request) => {
+      expect(Object.values(request.criteria).some((description) => description.startsWith('navigate '))).toBe(false);
+      return answer(request, 'unsupported');
+    }) });
+    expect(await navigatingExecutor.runStep(navigating.ctx)).toMatchObject({ status: 'blocked' });
+  });
   it('does not silently truncate choices on large screens', async () => {
     const fixture = context({ tree: { id: 'root', children: Array.from({ length: 254 }, (_, index) => ({ id: `n${index}`, role: 'button', name: `Button ${index}` })) } });
     const decide = vi.fn<DecisionModel['decide']>();

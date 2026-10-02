@@ -133,7 +133,9 @@ or a distribution that does not sum to one fail with `MODEL_OUTPUT_INVALID`.
 An assertion that contradicts the screen fails with `ASSERTION_FAILED`.
 A low-confidence assertion, incomplete semantic capture, or an explicit
 `inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An uncertain action
-returns a blocked `AUTOMATION_UNSUPPORTED`, before any mutation.
+returns a blocked `AUTOMATION_UNSUPPORTED` before the selected action is
+dispatched; actions from earlier confident decisions in the same step have
+already run.
 
 The executor sends at most `maxModelCalls` requests and keeps each request
 under the step's abort signal. Calls, tokens, latency, and provider/model
