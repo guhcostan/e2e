@@ -289,6 +289,7 @@ measurement.
 | LLM agent | `gpt-6-luna` via OpenCodeX Zen | - | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
 | Decision model | `clef-flash` via Cloudflare | off (default) | 5/5 | 9.3s (8.5–10.8) | 12 | 12.3k in / 0 out | ~$0.0011 | ~$0.0055 |
 | Decision model | `clef` via Cloudflare | off (default) | 5/5 | 11.5s (10.1–13.9) | 12 | 12.3k in / 0 out | ~$0.0030 | ~$0.015 |
+| Decision model | `laya-rl-agent` via Laya, automatic routing | off (default) | 0/4, plus 1 run refused for credits | ~1s, blocked at the first decision | 1 | 684 in / 0 out | 1 credit per input token | - |
 
 All three finish every run. The two decision models take the same 12-call
 trajectory on every repetition (type, Add, type, Add, check, then the
@@ -317,6 +318,18 @@ the second name without submitting it; the operation and target questions
 now state that typed text is not saved until it is submitted. The
 independent completion check caught that last mistake and failed the run
 instead of passing it.
+
+Laya serves the same System One API, so it runs through `systemOne()` with
+`structured: true` (`apps/testbed/e2e.bench-laya.config.ts`, `LAYA_API_KEY`).
+On four runs its first operation question chose `unsupported` with
+probability 0.29 and confidence 0.10, over a flat distribution (navigate
+0.19, type 0.15, tap 0.14), so the step blocked before any action. Its
+response metadata shows the router classified the English prompt as Spanish
+and answered with its multilingual checkpoint, which may explain the flat
+distribution. The workspace ran out of free credits before a pinned English
+checkpoint could be tried, so this row is incomplete. Laya bills one credit
+per input token; a full five-run row at the 12.3k tokens per run Clef
+needed is about 62k credits.
 
 ## Current limits
 
