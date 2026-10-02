@@ -28,6 +28,8 @@ export function actionChoice(request: DecisionRequest, action: string, value?: s
 export function context(options: {
   kind?: 'act' | 'assert'; params?: Readonly<Record<string, JsonValue>>;
   tree?: ExecutorNode; maxModelCalls?: number; observation?: Partial<ExecutorObservation>;
+  /** Pixel taint for the attempt; true mirrors a post-secret viewport, which withholds pixels. Defaults to true. */
+  tainted?: boolean;
 } = {}) {
   const signal = new AbortController().signal;
   const noop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -62,7 +64,7 @@ export function context(options: {
     attempt: { testId: 'test', attemptId: 'attempt', index: 0, signal, memory: new Map() },
     signal, target: { name: 'web', platform: 'web', verbs: new Set(Object.keys(actions) as (keyof ExecutorActions)[]) },
     model: undefined, providerOptions: undefined, ledger: 'the actor claimed success', agentContext: 'project context',
-    actions, observe, pixelsTainted: true, attachTranscript: () => {}, attachTurns: () => {}, attachScreenshot: async () => 'screenshot',
+    actions, observe, pixelsTainted: options.tainted ?? true, attachTranscript: () => {}, attachTurns: () => {}, attachScreenshot: async () => 'screenshot',
     budgets: { maxActions: 25, maxModelCalls: options.maxModelCalls ?? 25, remainingMs: () => 60_000,
       actionsUsed: () => 0, recordModelCall: (call) => { usage.push(call ?? {}); }, runTool: (_call, body) => body() },
   };
