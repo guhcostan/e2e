@@ -200,15 +200,27 @@ Five `--no-cache` runs per row on the same machine, so every repetition
 spends real model calls. Small N: treat this as a smoke comparison, not a
 measurement.
 
-| Side | Model | Shape · gates | Completed | Wall (mean) | Calls / run | Input tokens / run |
-| --- | --- | --- | --- | --- | --- | --- |
-| LLM agent | `gpt-6-luna` via OpenCodeX | - | 5/5 | 14.9s | 5.6 | ~25k |
-| Decision model | `clef-flash` via Cloudflare | flat · 0.9 / 0.9 | 0/5 | ~1s | 1 | ~1.5k |
-| Decision model | `clef-flash` via Cloudflare | flat · 0.6 / 0.5 | 0/5 | ~1.5s | 2 | ~3.4k |
-| Decision model | `clef-flash` via Cloudflare | flat · 0.51 / 0.3 | 0/5 | ~1.5s | 2 | ~3.4k |
-| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.9 / 0.9 | 0/5, op1 at 0.909 / 0.802 | ~1s | 1 | ~1.5k |
-| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.8 | 0/5, target1 at 0.940 / 0.775 | ~1.2s | 2 | ~1.5k |
-| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.75 | 0/5, op2 at 0.451 / 0.173 | ~2s | 3 | ~2.3k |
+| Side | Model | Shape · gates | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| LLM agent | `gpt-6-luna` via OpenCodeX Zen | - | 5/5 | 14.9s (13.7–16.0) | 6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
+| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.9 / 0.9 | 0/5, op1 at 0.909 / 0.802 | ~1s | 1 | ~0.8k in / 0 out | ~$0.00007 | ~$0.0004 |
+| Decision model | `clef-flash` via Cloudflare | hierarchical · 0.85 / 0.75 | 0/5, op2 at 0.451 / 0.173 | ~2s | 3 | ~2.3k in / 0 out | ~$0.0002 | ~$0.001 |
+| Decision model | `clef` via Cloudflare | hierarchical · 0.51 / 0 | 5/5 | 14.4s (10.7–18.5) | 12 | ~11.7k in / 0 out | ~$0.0028 | ~$0.014 |
+
+Success rate and reliability first: luna and full Clef both finish 5/5 while
+clef-flash finishes none — its answers are bit-identical across repetitions
+(maximally deterministic) but stay under every usable gate. Full Clef takes
+exactly 12 calls on all five runs (same trajectory, only latency varies),
+while luna varies its path (4–6 calls) and still lands every time. On
+speed the two finishers tie at ~14–15s per flow. On cost, Cloudflare bills
+per input token (clef $0.240/M, clef-flash $0.090/M: five runs total ~$0.014
+for full Clef, ~$0.001 or less for flash). Luna is priced per token on
+OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input, $0.50/M
+output); a fresh traced run measured 26.9k input tokens at 73% cached prefix
+plus 169 output tokens, which works out to ~$0.001 per run and ~$0.005 for
+five. The whole comparison (15 runs) costs on the order of $0.02. Small N
+and live prices change, so re-check the pricing pages before budgeting; Zen
+subscription users consume plan quota instead of per-token billing.
 
 The decision rows all block on uncertainty, never on a wrong action: the
 unparametrized flow offers no type choice at all (values only come from

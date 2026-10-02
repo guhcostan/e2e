@@ -5,6 +5,7 @@ import { clef, decisionExecutor } from '@e2e-dev/decision';
 const model = clef({
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
   apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
+  model: process.env.BENCH_CLEF_MODEL === 'clef' ? 'clef' : 'clef-flash',
 });
 
 export default {
