@@ -110,13 +110,31 @@ class Collector {
   /** Real path of the module being collected, the file a test's source prefers. */
   private readonly moduleFile: string | undefined;
 
-  constructor(moduleFile: string | undefined) {
+  constructor(
+    moduleFile: string | undefined,
+    /** Rewrites a registered secret value in a title to its marker. */
+    private readonly redactTitle: (title: string) => string,
+  ) {
     this.moduleFile = moduleFile === undefined ? undefined : realPath(moduleFile);
   }
 
   close(): ModuleRegistration {
     this.closed = true;
     return { tests: this.tests, hooks: this.hooks };
+  }
+
+  /**
+   * The title as it registers: validated as written, redacted, then
+   * normalized to NFC, and validated again, since a marker can be longer
+   * than the value it replaces.
+   */
+  private title(raw: string): string {
+    const rawError = validateTitle(raw);
+    if (rawError !== null) throw new CollectionError(rawError);
+    const title = this.redactTitle(raw).normalize('NFC');
+    const error = title === raw.normalize('NFC') ? null : validateTitle(title);
+    if (error !== null) throw new CollectionError(`${error} once secret values are redacted`);
+    return title;
   }
 
   private assertOpen(api: string): void {
@@ -137,9 +155,7 @@ class Collector {
     fixtures: readonly FixtureDefinition[],
   ): TestCase {
     this.assertOpen(kind === 'setup' ? 'test.setup()' : 'test()');
-    const titleError = validateTitle(title);
-    if (titleError !== null) throw new CollectionError(titleError);
-    const normalizedTitle = title.normalize('NFC');
+    const normalizedTitle = this.title(title);
     if (typeof fn !== 'function') throw new CollectionError('test body must be a function');
     if (kind === 'setup') {
       if (this.currentGroup !== undefined) {
@@ -187,12 +203,11 @@ class Collector {
 
   registerDescribe(title: string, options: DescribeOptions, body: () => unknown): void {
     this.assertOpen('describe()');
-    const titleError = validateTitle(title);
-    if (titleError !== null) throw new CollectionError(titleError);
+    const normalizedTitle = this.title(title);
     if (typeof body !== 'function') throw new CollectionError('describe body must be a function');
     validateDescribeOptions(options, this.currentGroup);
     const group: GroupNode = {
-      title: title.normalize('NFC'),
+      title: normalizedTitle,
       options,
       parent: this.currentGroup,
       serial: options.serial === true,
@@ -203,7 +218,7 @@ class Collector {
       const result = body();
       if (isPromiseLike(result)) {
         throw new CollectionError(
-          `describe body for ${JSON.stringify(title)} must finish synchronously`,
+          `describe body for ${JSON.stringify(group.title)} must finish synchronously`,
         );
       }
     } finally {
@@ -440,16 +455,21 @@ const collectorSlot = realmSlot<Collector>('e2e.activeCollector.v1');
 /**
  * Runs `load` with a fresh collector active and returns everything it
  * registered. `moduleFile` is the absolute path of the module `load` imports;
- * a test's source prefers a frame in that file.
+ * a test's source prefers a frame in that file. `redactTitle` is applied to
+ * every test and describe title as it registers, so a secret a title spells
+ * out never reaches a test id, a report, or a path derived from either; the
+ * runner passes the static secrets of the config (`staticSecretLedger`), the
+ * same in every process, so ids agree across them.
  */
 export async function collectModule(
   load: () => Promise<unknown>,
   moduleFile?: string,
+  redactTitle: (title: string) => string = (title) => title,
 ): Promise<ModuleRegistration> {
   if (collectorSlot.get(globalThis) !== undefined) {
     throw new CollectionError('collection is already in progress');
   }
-  const collector = new Collector(moduleFile);
+  const collector = new Collector(moduleFile, redactTitle);
   collectorSlot.set(globalThis, collector);
   try {
     await load();

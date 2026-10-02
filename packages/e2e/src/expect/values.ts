@@ -287,14 +287,19 @@ class ValueExpectationImpl<T> implements ValueExpectation<T> {
   }
 }
 
-/** Walks `keys` into `value`; `present` says whether the whole path resolved. */
+/**
+ * Walks `keys` into `value`; `present` says whether the whole path resolved.
+ * A primitive on the way is read through its wrapper object, as Jest does,
+ * so a string has its `length` and indices; `null` and `undefined` have no
+ * properties.
+ */
 function lookup(value: unknown, keys: readonly (string | number)[]): { present: boolean; value: unknown } {
   let current: unknown = value;
   for (const key of keys) {
-    if ((typeof current !== 'object' && typeof current !== 'function') || current === null || !(key in current)) {
-      return { present: false, value: undefined };
-    }
-    current = (current as Record<string | number, unknown>)[key];
+    if (current === null || current === undefined) return { present: false, value: undefined };
+    const holder: object = Object(current);
+    if (!(key in holder)) return { present: false, value: undefined };
+    current = (holder as Record<string | number, unknown>)[key];
   }
   return { present: true, value: current };
 }

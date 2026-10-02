@@ -286,12 +286,18 @@ export class LocatorEngine {
     }
   }
 
-  /** Reads one node for polling surfaces; returns null while zero matches. */
+  /**
+   * Reads one node for polling surfaces; returns null while zero matches.
+   * A poll that waits for absence passes `missingFrame: 'empty'`: nothing
+   * under a frame that is not in the document is attached, so the sample is
+   * zero matches rather than a wait for the frame.
+   */
   async tryRead(
     expression: LocatorExpression,
     deadline: Deadline,
+    missingFrame: MissingFrame = 'wait',
   ): Promise<{ node: SemanticNode | null; count: number }> {
-    return this.readOne(expression, deadline, 'wait');
+    return this.readOne(expression, deadline, missingFrame);
   }
 
   /**

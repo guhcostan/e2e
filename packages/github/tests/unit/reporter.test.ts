@@ -160,17 +160,38 @@ describe('reportRun', () => {
     const blank = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs' });
     await reportRun(failedRun, signal, { key: '' }, blank.deps);
     expect(postedBody(blank.calls).startsWith('<!-- e2e-github project=dev.example.shop workflow=e2e job=test -->\n')).toBe(true);
-    // A long key is cut the same way every run, so the marker stays bounded and findable.
+    // A key that fits is the encoded key itself, byte for byte, so comments already on open pull requests are found.
+    const fits = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs' });
+    await reportRun(failedRun, signal, { key: 'k'.repeat(200) }, fits.deps);
+    expect(postedBody(fits.calls).startsWith(`<!-- e2e-github project=dev.example.shop workflow=e2e job=test key=${'k'.repeat(200)} -->\n`)).toBe(true);
+    // A long key keeps a prefix and a digest of the whole key, the same every run, so the marker stays bounded and findable.
     const long = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs' });
     await reportRun(failedRun, signal, { key: 'k'.repeat(5_000) }, long.deps);
-    expect(postedBody(long.calls).startsWith(`<!-- e2e-github project=dev.example.shop workflow=e2e job=test key=${'k'.repeat(200)} -->\n`)).toBe(true);
+    expect(postedBody(long.calls).startsWith(`<!-- e2e-github project=dev.example.shop workflow=e2e job=test key=${'k'.repeat(183)}#622b8b1d5094d382 -->\n`)).toBe(true);
     // The cut is on the encoded form and never inside a percent escape, so emoji cannot outgrow the marker.
     const emoji = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs', GITHUB_WORKFLOW: '💥'.repeat(300), GITHUB_JOB: 'ü'.repeat(300) });
     await reportRun(failedRun, signal, { key: '💥'.repeat(300) }, emoji.deps);
     const marker = /^<!-- e2e-github [^\n]* -->/.exec(postedBody(emoji.calls))?.[0] ?? '';
     expect(marker.length).toBeGreaterThan(0);
     expect(marker.length).toBeLessThanOrEqual(1_024);
-    expect(marker).toMatch(/ key=(?:%[0-9A-F]{2})+ -->$/);
+    expect(marker).toMatch(/ key=(?:%[0-9A-F]{2})+#[0-9a-f]{16} -->$/);
+  });
+
+  it('keeps two long keys that share their first 200 characters on their own comments', async () => {
+    const markers: string[] = [];
+    for (const key of [`android-${'x'.repeat(200)}-A`, `android-${'x'.repeat(200)}-B`]) {
+      const d = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs' });
+      await reportRun(failedRun, signal, { key }, d.deps);
+      markers.push(postedBody(d.calls).split('\n', 1)[0] ?? '');
+    }
+    expect(markers[0]).toMatch(/^<!-- e2e-github .* key=android-x+#[0-9a-f]{16} -->$/);
+    expect(markers[0]).not.toBe(markers[1]);
+    // B does not take over the comment A posted; it posts its own.
+    const comments = [{ id: 1, body: `${markers[0]}\n### e2e android A` }];
+    const gh = fakeGitHub({ 'GET *': () => json(200, comments), 'POST *': () => posted.clone() });
+    const d = deps({ ...actionsEnv, GITHUB_TOKEN: 'ghs' }, gh.fetch);
+    await reportRun(failedRun, signal, { key: `android-${'x'.repeat(200)}-B` }, d.deps);
+    expect(gh.calls.map((call) => call.method)).toEqual(['GET', 'POST']);
   });
 
   it.each([

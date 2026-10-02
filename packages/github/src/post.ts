@@ -1,7 +1,7 @@
 /**
  * One comment per pull request, kept current: the reporter looks for the
- * comment carrying its marker and edits it, and creates one only when none
- * exists. The REST calls are the three GitHub documents them as: list the
+ * comment whose first line is its marker and edits it, and creates one only
+ * when none exists. The REST calls are the three GitHub documents them as: list the
  * issue's comments, update a comment, create a comment.
  *
  * Every request carries the reporter's abort signal. Anything GitHub answers
@@ -60,14 +60,25 @@ async function request(params: PostParams, method: Method, route: string, body?:
   throw new Error(`GitHub responded ${response.status} to ${method} ${route}${detail === '' ? '' : `: ${detail}`}`);
 }
 
+/**
+ * Whether a comment body is the reporter's own for this marker: its first
+ * line is the marker, exactly. The reporter has always written it there, so
+ * a marker quoted further down, as in a reply, is not a match, and neither
+ * is a first line that only starts or ends with it.
+ */
+function carriesMarker(body: string, marker: string): boolean {
+  const end = body.indexOf('\n');
+  const firstLine = end === -1 ? body : body.slice(0, end);
+  return firstLine.replace(/\r$/, '') === marker;
+}
+
 /** The id of the comment carrying the marker, or undefined when no page has one. */
 async function findComment(params: PostParams, issue: string): Promise<number | undefined> {
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const comments = await request(params, 'GET', `${issue}/comments?per_page=${PER_PAGE}&page=${page}`);
     if (!Array.isArray(comments)) throw new Error('GitHub answered the comment list with a body that is not a list');
     const found = comments.find(
-      (comment: unknown) =>
-        isRecord(comment) && typeof comment['body'] === 'string' && comment['body'].includes(params.marker),
+      (comment: unknown) => isRecord(comment) && typeof comment['body'] === 'string' && carriesMarker(comment['body'], params.marker),
     );
     if (isRecord(found) && typeof found['id'] === 'number') return found['id'];
     if (comments.length < PER_PAGE) return undefined;

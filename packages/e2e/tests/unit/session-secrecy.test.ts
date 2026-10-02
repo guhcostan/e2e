@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ResolvedConfig } from '../../src/config/resolve.ts';
 import type { TargetSession } from '../../src/engine/surface.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, sessionSecrecy } from '../../src/run/secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, processSecrets, redactForSession, sessionSecrecy, staticSecretLedger } from '../../src/run/secrecy.ts';
 
 const STATIC_VALUE = 'static-config-password-5521';
 const PROVIDER_VALUE = 'provider-minted-token-8804';
@@ -60,5 +60,23 @@ describe('session exposure', () => {
     engineHeld.exposure.raise('engine');
     expect(engineHeld.exposure.withholdsPixels).toBe(true);
     expect(carriedSecrecy(engineHeld, secrets).tainted).toBe(true);
+  });
+});
+
+describe('redaction before and after a session opens', () => {
+  it('redacts the static values with no session, and every value the session learned once one is open', () => {
+    expect(redactForSession(undefined, secrets, `title ${STATIC_VALUE}`)).toBe('title <secret:password>');
+    // A provider value is not known before it resolves.
+    expect(redactForSession(undefined, secrets, `title ${PROVIDER_VALUE}`)).toBe(`title ${PROVIDER_VALUE}`);
+    const session = newSession();
+    sessionSecrecy(session, secrets).ledger.register('token', PROVIDER_VALUE);
+    expect(redactForSession(session, secrets, `${STATIC_VALUE} ${PROVIDER_VALUE}`)).toBe('<secret:password> <secret:token>');
+  });
+
+  it('keeps one static ledger per secrets map, untouched by what a session learns', () => {
+    const ledger = staticSecretLedger(secrets);
+    expect(staticSecretLedger(secrets)).toBe(ledger);
+    sessionSecrecy(newSession(), secrets).ledger.register('token', PROVIDER_VALUE);
+    expect(ledger.entries()).toEqual([['password', STATIC_VALUE]]);
   });
 });

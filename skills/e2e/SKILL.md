@@ -10,8 +10,8 @@ one goal; `agent.assert`, `agent.waitFor`, and `agent.extract` judge the
 screen. `screen`, `app`, `browser`, and `expect` make exact interactions and
 checks. The replay cache reruns verified actions and checks their recorded end
 state without a model call; agent judgments still run live. UI targets use
-`@e2e-dev/web` for browsers or `@e2e-dev/mobile` for iOS simulators and
-Android emulators. A test that takes only `app` can check an API with `fetch`
+`@e2e-dev/web` for browsers or `@e2e-dev/mobile` for iOS simulators,
+Android emulators, and connected phones. A test that takes only `app` can check an API with `fetch`
 and `expect` (topic `writing-tests`). Model sign-in commands are in
 [setup](references/setup.md#subscriptions-and-api-keys).
 

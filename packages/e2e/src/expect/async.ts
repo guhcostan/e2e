@@ -34,7 +34,11 @@ interface MatcherSpec {
    * the matches, `'read'` also reads each of them.
    */
   readonly wholeSet?: boolean | 'read';
-  /** The predicate is meaningful even when zero nodes match. */
+  /**
+   * The predicate is meaningful even when zero nodes match, so a locator
+   * under a frame that is not in the document samples as zero matches
+   * instead of waiting for the frame.
+   */
   readonly evaluableWithoutNode?: boolean;
   /**
    * Whether the one matched node can answer the predicate at all. A node it
@@ -220,7 +224,8 @@ class AsyncExpectationImpl implements AsyncExpectation {
       const refs = await engine.resolveAll(this.internals.expression, deadline);
       return { count: refs.length, node: null, nodes: [] };
     }
-    const { node, count } = await engine.tryRead(this.internals.expression, deadline);
+    const missingFrame = spec.evaluableWithoutNode === true ? 'empty' : 'wait';
+    const { node, count } = await engine.tryRead(this.internals.expression, deadline, missingFrame);
     return { count, node, nodes: [] };
   }
 

@@ -215,7 +215,7 @@ text, both `[]` at zero. Text is the rendered text, whitespace collapsed: on
 the web what `innerText` reads (`text-transform` applies, `display: none`
 drops out, `<br>` is a space); `toHaveText` reads the same. `isChecked()` is
 `false`, not an error, on a node with no checked state, so query checkable
-controls by role. `waitFor({ state?: 'visible' | 'hidden', timeout? })` waits
+controls by role. `waitFor({ state?: 'attached' | 'detached' | 'visible' | 'hidden', timeout? })` waits
 within `actionTimeout`, else `LOCATOR_NOT_FOUND`. For a value that has to
 settle use `expect`, not a read. Reading a password field's value or
 attributes is `POLICY_DENIED`, as is `toHaveAttribute` on one, negated too.
@@ -265,8 +265,8 @@ list or tests a RegExp. A failed matcher is `ASSERTION_FAILED`, exit code 1.
 
 Playwright's `{ checked: false }`, `{ enabled: false }`, `{ visible: false }`,
 and `{ attached: false }` flip their matchers, and `{ ignoreCase: true }`
-works on `toHaveText`, `toContainText`, `toHaveAccessibleName`, and
-`toHaveAttribute(name, value)`. Any other option, `indeterminate` or
+works on `toHaveText`, `toContainText`, `toHaveAccessibleName`,
+`toHaveAttribute(name, value)`, and `expect(browser).toHaveURL`. Any other option, `indeterminate` or
 `useInnerText` included, is `INVALID_ARGUMENT`, in JavaScript too.
 
 ## Sign-in sessions
@@ -334,6 +334,11 @@ credentials: {
   `E2E_SECRET_STRIPE_KEY`; `secrets.get('stripe-key')` is the same kind of
   handle, fills any editable input, and is redacted by name everywhere the
   runner writes.
+- A registered value passed as a plain string (`process.env.STRIPE_KEY` in a
+  title, a URL, a locator, an `agent.act` instruction or param) is redacted
+  too: reports, step labels, the executor, and the model see
+  `<secret:stripe-key>` (and so does the test id, for a value in a title),
+  so the agent cannot type it. Pass the handle.
 
 ## The browser fixture (browser only)
 

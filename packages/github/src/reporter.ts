@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -58,17 +59,28 @@ export function github(options: GitHubOptions = {}): Reporter {
 }
 
 /**
- * Each encoded marker field is cut to this many characters, so four fields
+ * Each encoded marker field is at most this many characters, so four fields
  * and their names stay under a kilobyte whatever the input, well inside the
- * room the page leaves under GitHub's size limit. The cut
- * never lands inside a percent escape, and it is the same on every run.
+ * room the page leaves under GitHub's size limit.
  */
 const MAX_MARKER_FIELD_CHARS = 200;
+/** Hex characters of the SHA-256 digest that stands in for a long field's cut tail. */
+const MARKER_DIGEST_CHARS = 16;
 
+/**
+ * One marker field, URI-encoded. A field that fits is the encoded value
+ * itself, as it always was, so comments already on open pull requests are
+ * still found. A longer one keeps a readable prefix, never cut inside a
+ * percent escape, then `#` and a digest of the whole value: encoding escapes
+ * every `#`, so no value that fits can read the same, and two long values
+ * that share a prefix still differ.
+ */
 function markerField(value: string): string {
   const encoded = encodeURIComponent(value);
   if (encoded.length <= MAX_MARKER_FIELD_CHARS) return encoded;
-  return encoded.slice(0, MAX_MARKER_FIELD_CHARS).replace(/%[0-9A-F]?$/, '');
+  const digest = createHash('sha256').update(value).digest('hex').slice(0, MARKER_DIGEST_CHARS);
+  const prefix = encoded.slice(0, MAX_MARKER_FIELD_CHARS - MARKER_DIGEST_CHARS - 1).replace(/%[0-9A-F]?$/, '');
+  return `${prefix}#${digest}`;
 }
 
 /**

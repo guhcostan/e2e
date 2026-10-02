@@ -27,7 +27,7 @@ import type { ProcessPool } from './process-pool.ts';
 import type { AppProcesses } from './managed-process.ts';
 import { PreparedEngines, recordingNotices, startDeclaredProcesses, validateEngine } from './provision.ts';
 import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
-import { sessionSecrecy } from './secrecy.ts';
+import { redactForSession, sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
 import { outputLayout } from './output.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -136,12 +136,13 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
       ...(options.onProgress === undefined ? {} : { onProgress: (_testId: unknown, progress: StepProgress) => options.onProgress?.(progress) }),
     },
   });
+  let session: TargetSession | undefined;
   const steps = new StepRecorder(attemptId, {
     maxEventsPerStep: config.limits.maxEventsPerStep,
     projectRoot: config.projectRoot,
+    redact: (text) => redactForSession(session, config.allSecrets, text),
     ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
   });
-  let session: TargetSession | undefined;
   const artifacts = createAttemptArtifacts({
     artifactsRoot: layout.artifacts,
     segments: [target.name, 'sessions', attemptId],

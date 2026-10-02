@@ -184,7 +184,7 @@ export class Invocation {
     this.agent = runtime.select(options.agent);
     this.deadline = runtime.engine.deadline(options.timeoutMs);
     this.pixelTier = options.vision === true || options.vision === 'only';
-    this.system = buildSystem(options.task, this.agent.agentContext);
+    this.system = runtime.redact(buildSystem(options.task, this.agent.agentContext));
     this.systemBytes = tokenUpperBound(this.system);
   }
 
@@ -337,11 +337,19 @@ export class Invocation {
     for (;;) {
       this.checkDeadline();
       this.consumeModelCall();
-      const prompt = buildPrompt({
-        ...request.prompt,
-        ...(this.treeWithheld ? { withholdTree: true } : {}),
-        ...(repair === undefined ? {} : { repair }),
-      });
+      // The observation is redacted already; the instruction is the test's
+      // own text, which may spell out a registered value. The repair's raw
+      // text is redacted before the prompt cuts it, so the cut never splits a
+      // value into a fragment whole-value matching would miss.
+      const prompt = this.runtime.redact(
+        buildPrompt({
+          ...request.prompt,
+          ...(this.treeWithheld ? { withholdTree: true } : {}),
+          ...(repair === undefined
+            ? {}
+            : { repair: { ...repair, rawText: repair.rawText === undefined ? undefined : this.runtime.redact(repair.rawText) } }),
+        }),
+      );
       // Pixels travel with the observation they were captured for, so the
       // image and the tree in one request always describe one revision.
       const images = imagesFor(request.prompt.observation);

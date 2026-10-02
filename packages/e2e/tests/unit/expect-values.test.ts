@@ -252,6 +252,25 @@ describe('value matchers', () => {
     failsWith(() => e2eExpect(user).toHaveProperty(''), /dotted path/);
     failsWith(() => e2eExpect(null).toHaveProperty('a'), /to have property "a"/);
   });
+
+  it('toHaveProperty reads a primitive on the path through its wrapper, as Jest does', () => {
+    const tag = { label: 'abc', count: 3, flag: true, none: null, missing: undefined };
+    e2eExpect(tag).toHaveProperty('label.length', 3);
+    e2eExpect(tag).toHaveProperty(['label', 0], 'a');
+    e2eExpect(tag).toHaveProperty('label.2', 'c');
+    e2eExpect(tag).not.toHaveProperty('label.3');
+    e2eExpect(tag).not.toHaveProperty('label.length', 4);
+    e2eExpect(tag).toHaveProperty('count.toFixed');
+    e2eExpect(tag).toHaveProperty('flag.valueOf');
+    e2eExpect('abc').toHaveProperty('length', 3);
+    e2eExpect(new String('abc')).toHaveProperty('length', 3);
+    e2eExpect(tag).toHaveProperty('none', null);
+    e2eExpect(tag).not.toHaveProperty('none.length');
+    e2eExpect(tag).not.toHaveProperty('missing.length');
+    failsWith(() => e2eExpect(tag).toHaveProperty('label.length', 4), /expected property "label.length" of .* to equal 4, got 3/);
+    failsWith(() => e2eExpect(tag).toHaveProperty('none.length'), /to have property "none.length"$/);
+    failsWith(() => e2eExpect(undefined).toHaveProperty('length'), /to have property "length"/);
+  });
 });
 
 describe('asymmetric matchers', () => {

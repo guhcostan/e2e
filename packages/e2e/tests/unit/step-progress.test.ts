@@ -128,4 +128,18 @@ describe('StepRecorder progress identity', () => {
     expect(JSON.stringify(heard)).not.toContain('private-value');
     expect(heard.at(-1)).toHaveProperty('error', steps.all()[0]!.error);
   });
+
+  it('records and publishes a label with a secret the test spelled into it redacted', async () => {
+    const heard: StepProgress[] = [];
+    const steps = new StepRecorder('attempt', {
+      onProgress: (progress) => heard.push(progress),
+      redact: (text) => text.replaceAll('private-value', '[REDACTED]'),
+    });
+    await steps.run('agent', 'agent.act', 'inspect private-value', async () => undefined);
+    expect(steps.all()[0]?.label).toBe('inspect [REDACTED]');
+    expect(heard).toMatchObject([
+      { phase: 'start', label: 'inspect [REDACTED]' },
+      { phase: 'end', label: 'inspect [REDACTED]' },
+    ]);
+  });
 });

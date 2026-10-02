@@ -84,6 +84,8 @@ export interface RealmManagerOptions {
   readonly cleanupTimeout: number;
   /** Run-level error sink for hook failures. */
   readonly runErrors: RunError[];
+  /** What collection rewrites titles with (`collectModule`), so a realm's tests match the collected ids. */
+  readonly redactTitle: (title: string) => string;
   readonly debug?: DebugTrace;
 }
 
@@ -103,6 +105,7 @@ export class RealmManager {
       collectModule(
         () => importModule(file.absolutePath, `${this.options.targetName}-${this.realmCounter}`),
         file.absolutePath,
+        this.options.redactTitle,
       ),
     );
     return this.adopt(registration, file);

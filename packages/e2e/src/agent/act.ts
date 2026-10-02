@@ -24,7 +24,7 @@ import { ConfigurationError } from '../internal/errors.ts';
 import { withAbort, withTimeout } from '../internal/time.ts';
 import type { ActOptions, ActResult, AgentErrorCode, JsonValue, ModelInstance, Secret } from '../types.ts';
 import { AgentError, CATEGORY_BY_CODE, toAgentError } from './error.ts';
-import { validateActOptions, validateInstruction, validateParams, validateVerdict } from './act-validation.ts';
+import { redactParams, validateActOptions, validateInstruction, validateParams, validateVerdict } from './act-validation.ts';
 import { ActionDispatcher } from './action-dispatcher.ts';
 import { resolveBoundedBudget, resolveTimeout } from './call-options.ts';
 import { RUNTIME_CODES, type ExecutorPixels, type StepExecutorContext, type StepVerdict } from './executor.ts';
@@ -137,13 +137,17 @@ export async function runAssertStep(
  */
 export async function dispatchAgentStep(
   runtime: AgentContext,
-  spec: DispatchSpec,
+  raw: DispatchSpec,
   // Resolved before the step opens, so an unknown name fails the call, not a
   // recorded step, and the step carries the agent it ran with.
-  agent: DispatchAgent = runtime.select(spec.agent),
+  agent: DispatchAgent = runtime.select(raw.agent),
 ): Promise<ActResult> {
+  const spec = redactSpec(raw, runtime.redact);
+  // Redacted per step, not once per agent: the ledger is live, so a value
+  // resolved since the agent was selected is covered too.
+  const context = agent.agentContext === undefined ? undefined : runtime.redact(agent.agentContext);
   return runtime.steps.run('agent', spec.api, spec.instruction, async () => {
-    const dispatch = new ActDispatch(runtime, spec, agent);
+    const dispatch = new ActDispatch(runtime, spec, { ...agent, agentContext: context });
     try {
       let verdict: StepVerdict;
       try {
@@ -162,6 +166,20 @@ export async function dispatchAgentStep(
       dispatch.finish();
     }
   }, { verifies: spec.kind === 'assert', agent: agent.name });
+}
+
+/**
+ * The spec with every registered secret value the test spelled into the
+ * instruction or a param string (a key or a leaf) rewritten to its marker,
+ * before anything reads it: the executor, its model, the step label, the
+ * trace cache, and the prior-step ledger all see the same redacted step. A
+ * `Secret` handle is already a placeholder here and stays fillable through
+ * `typeSecret`.
+ */
+function redactSpec(spec: DispatchSpec, redact: (text: string) => string): DispatchSpec {
+  const instruction = redact(spec.instruction);
+  if (spec.params === undefined) return { ...spec, instruction };
+  return { ...spec, instruction, ...redactParams(spec.params, spec.templates, redact) };
 }
 
 /** One step's wiring: the collaborators, the executor's context, and the verdict mapping. */

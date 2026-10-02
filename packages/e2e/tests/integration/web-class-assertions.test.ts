@@ -3,7 +3,8 @@
  * loads it: from a config file, so the engine's `e2e/engine` and the runner's
  * core are two module copies and `instanceof` cannot tell a runner error apart.
  * A node that is not there yet must keep the matcher polling; an ambiguous
- * locator must still fail at once.
+ * locator must still fail at once. `toHaveURL` takes Playwright's
+ * `ignoreCase`.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -37,6 +38,18 @@ test('an empty class attribute is an empty class list', async ({ app, browser })
 test('a missing class attribute is not an empty class list', async ({ app, browser, screen }) => {
   await app.open('/classes');
   await expect(browser).toHaveClass(screen.getByTestId('items'), '', { timeout: 300 });
+});
+
+test('toHaveURL ignoreCase folds the comparison', async ({ app, browser }) => {
+  await app.open('/classes');
+  await expect(browser).toHaveURL('/CLASSES', { ignoreCase: true });
+  await expect(browser).toHaveURL(/CLASSES$/, { ignoreCase: true });
+  await expect(browser).not.toHaveURL('/CLASSES', { timeout: 300 });
+});
+
+test('a negated toHaveURL ignoreCase fails on a case-folded match', async ({ app, browser }) => {
+  await app.open('/classes');
+  await expect(browser).not.toHaveURL('/CLASSES', { ignoreCase: true, timeout: 300 });
 });
 `;
 
@@ -80,4 +93,14 @@ describe('web class assertions', () => {
     expect(missing.attempts[0]!.error?.code).toBe('ASSERTION_FAILED');
     expect(missing.attempts[0]!.error?.message).toContain('observed: no class attribute');
   });
+
+  it('honors ignoreCase on toHaveURL, negated too', () => {
+    const folded = resultByTitle(outcome, 'toHaveURL ignoreCase folds the comparison');
+    expect(folded.status, JSON.stringify(folded.attempts[0]?.error)).toBe('passed');
+    const negated = resultByTitle(outcome, 'a negated toHaveURL ignoreCase fails on a case-folded match');
+    expect(negated.status).toBe('failed');
+    expect(negated.attempts[0]!.error?.code).toBe('ASSERTION_FAILED');
+    expect(negated.attempts[0]!.error?.message).toContain('expected: not URL /CLASSES (ignoring case)');
+  });
+
 });

@@ -16,7 +16,7 @@ import { AiTraceRecorder, registerAiTraceRecorder } from '../../internal/ai-trac
 import { DebugTrace } from '../../internal/debug.ts';
 import { classifyError, ConfigurationError, serializeError } from '../../internal/errors.ts';
 import { StreamRedactor } from '../../internal/redact.ts';
-import { processSecrets, registerStaticSecrets } from '../secrecy.ts';
+import { processSecrets, registerStaticSecrets, staticSecretLedger } from '../secrecy.ts';
 import { SessionStore } from '../sessions.ts';
 import type {
   ChildProcessInbound,
@@ -161,6 +161,7 @@ async function bootstrap(
     const registration = await collectModule(
       () => importModule(unit.absolutePath, `worker-collect-${collectCounter}`),
       unit.absolutePath,
+      staticSecretLedger(config.allSecrets).redact,
     );
     const collected = collectFromRegistration(config.projectRoot, unit.absolutePath, registration);
     const byId = new Map(collected.tests.map((test) => [test.id, test]));

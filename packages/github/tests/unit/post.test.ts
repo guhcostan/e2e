@@ -49,6 +49,22 @@ describe('upsertComment', () => {
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0);
   });
 
+  it('matches only a comment whose first line is the marker, not one that quotes it or extends it', async () => {
+    const { fetch, calls } = fakeGitHub({
+      'GET *': () =>
+        json(200, [
+          { id: 1, body: `> ${MARKER}\n> quoted in a reply` },
+          { id: 2, body: `### e2e\n${MARKER}` },
+          { id: 3, body: `${MARKER.replace(' -->', ' key=a -->')}\nanother job` },
+          { id: 4, body: `${MARKER} extra\nnot the marker line` },
+          { id: 5, body: `${MARKER}\r\nedited on the web` },
+        ]),
+      'PATCH /repos/octo/app/issues/comments/5': () => json(200, { id: 5, html_url: 'https://github.com/octo/app/pull/41#issuecomment-5' }),
+    });
+    await expect(upsertComment(params(fetch))).resolves.toBe('https://github.com/octo/app/pull/41#issuecomment-5');
+    expect(calls.map((call) => call.method)).toEqual(['GET', 'PATCH']);
+  });
+
   it('stops searching after a hundred full pages and posts a new comment', async () => {
     const { fetch, calls } = fakeGitHub({
       'GET *': (call) => json(200, page(Number(new URL(call.url).searchParams.get('page')) * 100, 100)),

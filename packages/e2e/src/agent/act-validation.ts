@@ -120,6 +120,68 @@ export function validateParams(params: AgentParams | undefined): {
   };
 }
 
+/**
+ * Projected params with `redact` applied to every string in them, object
+ * keys included, and their `unique()` templates moved with their leaves: a
+ * template's pointer follows the redacted keys and its value is redacted as
+ * the leaf is, so the trace cache slots what the params hold.
+ */
+export function redactParams(
+  params: Readonly<Record<string, JsonValue>>,
+  templates: readonly ParamTemplate[],
+  redact: (text: string) => string,
+): { params: Readonly<Record<string, JsonValue>>; templates: readonly ParamTemplate[] } {
+  const pointers = new Map<string, string>();
+  const redacted = redactJson(params, redact, { from: '', to: '' }, pointers) as Readonly<Record<string, JsonValue>>;
+  return {
+    params: redacted,
+    templates: templates.map((template) => ({
+      pointer: pointers.get(template.pointer) ?? template.pointer,
+      value: redact(template.value),
+    })),
+  };
+}
+
+/**
+ * `value` with `redact` applied to every string in it, object keys included.
+ * Records in `pointers` where each node's pointer (`at.from`) lands once its
+ * keys are redacted (`at.to`). Two keys of one object that redact alike would
+ * leave one value standing for both, so that is `INVALID_ARGUMENT`.
+ */
+function redactJson(
+  value: JsonValue,
+  redact: (text: string) => string,
+  at: { readonly from: string; readonly to: string },
+  pointers: Map<string, string>,
+): JsonValue {
+  pointers.set(at.from, at.to);
+  if (typeof value === 'string') return redact(value);
+  if (Array.isArray(value)) {
+    return value.map((entry, index) =>
+      redactJson(entry, redact, { from: paramPointer(at.from, index), to: paramPointer(at.to, index) }, pointers),
+    );
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  const out: Record<string, JsonValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const clean = redact(key);
+    if (Object.hasOwn(out, clean)) {
+      throw new TestError(
+        'INVALID_ARGUMENT',
+        `agent.act params has two keys that read ${JSON.stringify(clean)} once secret values are redacted; a key cannot be told apart by a secret`,
+      );
+    }
+    // Defined, not assigned, so a `__proto__` key stays an own property.
+    Object.defineProperty(out, clean, {
+      value: redactJson(entry, redact, { from: paramPointer(at.from, key), to: paramPointer(at.to, clean) }, pointers),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
 /** The marked leaves one walk of the params found. */
 interface FoundParams {
   readonly secrets: Map<string, Secret>;

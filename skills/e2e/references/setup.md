@@ -252,10 +252,14 @@ For an app started elsewhere, point `app.url` at it, literally or via
 
 ## Mobile targets
 
-`@e2e-dev/mobile` drives iOS simulators and Android emulators through
-[agent-device](https://github.com/callstack/agent-device); needs Xcode with a
-simulator runtime or the Android SDK with an emulator; run
-`npx agent-device doctor` once.
+`@e2e-dev/mobile` drives iOS simulators, Android emulators, and connected
+phones through [agent-device](https://github.com/callstack/agent-device);
+needs Xcode with a simulator runtime or the Android SDK with an emulator (a
+phone needs Xcode with Developer Mode and runner signing, or adb with USB
+debugging authorized); run `npx agent-device doctor` once. Name a phone in `device` by the name
+`npx agent-device devices` lists, not its UDID or serial. On an iPhone, device
+settings (permissions, `clearState`, network, location, appearance,
+biometrics, keychain) and the clipboard are simulator-only.
 
 ```ts
 import type { E2EConfig } from 'e2e';
@@ -285,8 +289,14 @@ export default {
   `app.launchArguments` and `app.permissions` ride every fresh launch:
   arguments reach the app process (iOS) or `am start` (Android), permissions
   are set first.
+- Expo development build on an iOS simulator: `app.launchArguments:
+  ['--initialUrl', 'http://localhost:8081', '-EXDevMenuShowsAtLaunch', 'NO',
+  '-EXDevMenuIsOnboardingFinished', 'YES', '-EXDevMenuShowFloatingActionButton',
+  'NO']` loads that dev server on every fresh launch, dev menu off;
+  `app.command` (`npx expo start --port 8081`) with `readyUrl:
+  'http://localhost:8081/status'` starts it.
 - One worker per device. No `device`: every booted simulator or emulator of
-  the platform is the pool, up to `workers` (none booted: agent-device boots
+  the platform, and every connected phone, is the pool, up to `workers` (none booted: agent-device boots
   one); one `device`: one worker whatever `workers` says; a list (`device:
   ['iPhone 17', 'iPhone 17 Pro']`): an explicit pool. Devices boot in
   `prepare`, before the run's clock. Two sessions on one device fight over

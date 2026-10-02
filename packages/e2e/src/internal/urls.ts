@@ -2,7 +2,7 @@
 
 import { ConfigurationError } from './errors.ts';
 import { testPattern } from './regexp.ts';
-import { toTextPattern } from './text.ts';
+import { toTextPattern, withIgnoreCase } from './text.ts';
 
 export interface NormalizedBaseUrl {
   /** Serialized base URL without trailing artifacts beyond the normalized path. */
@@ -179,9 +179,16 @@ export function sameSite(url: string | URL, site: string): boolean {
  * Relative expected strings resolve against the base URL; string comparison is
  * exact after WHATWG serialization; regexps test the complete serialized URL.
  * Anything else is `INVALID_ARGUMENT`, the `toTextPattern` rule.
+ * `ignoreCase` is Playwright's: `true` compares a string case-insensitively
+ * and adds the `i` flag to a regexp, `false` removes it.
  */
-export function urlMatches(current: string, expected: string | RegExp, baseHref: string): boolean {
-  const pattern = toTextPattern(expected);
+export function urlMatches(
+  current: string,
+  expected: string | RegExp,
+  baseHref: string,
+  ignoreCase?: boolean,
+): boolean {
+  const pattern = withIgnoreCase(toTextPattern(expected), ignoreCase);
   if (pattern.kind === 'regexp') {
     return testPattern(pattern.source, pattern.flags, serializeForComparison(current));
   }
@@ -191,7 +198,10 @@ export function urlMatches(current: string, expected: string | RegExp, baseHref:
   } catch {
     return false;
   }
-  return serializeForComparison(current) === expectedUrl.href;
+  const actual = serializeForComparison(current);
+  return ignoreCase === true
+    ? actual.toLowerCase() === expectedUrl.href.toLowerCase()
+    : actual === expectedUrl.href;
 }
 
 function serializeForComparison(url: string): string {

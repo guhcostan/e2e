@@ -119,6 +119,32 @@ const ROLE_FILTER_KEYS = [...TEXT_OPTION_KEYS, 'checked', 'disabled', 'selected'
 /** The keys of `RoleOptions`: the accessible name and the filters. */
 const ROLE_OPTION_KEYS = ['name', ...ROLE_FILTER_KEYS] as const;
 
+/** The states `locator.waitFor` waits for, Playwright's four. */
+const WAIT_FOR_STATES: readonly string[] = ['attached', 'detached', 'visible', 'hidden'];
+
+/** The states absence satisfies: a frame missing from the document reads as zero matches for them. */
+const ABSENCE_STATES: ReadonlySet<string> = new Set(['detached', 'hidden']);
+
+type WaitForState = NonNullable<NonNullable<Parameters<Locator['waitFor']>[0]>['state']>;
+
+/**
+ * Whether the one match, or its absence, is in `state`: `attached` is any
+ * match, `detached` none, `visible` a match that is not hidden, and `hidden`
+ * a hidden match or none.
+ */
+function inWaitForState(node: SemanticNode | null, state: WaitForState): boolean {
+  switch (state) {
+    case 'attached':
+      return node !== null;
+    case 'detached':
+      return node === null;
+    case 'visible':
+      return isNodeVisible(node);
+    case 'hidden':
+      return !isNodeVisible(node);
+  }
+}
+
 class ScreenImpl implements Screen {
   constructor(
     protected readonly context: ScreenContext,
@@ -528,8 +554,15 @@ class LocatorImpl extends ScreenImpl implements Locator {
     return nodes.map((node) => normalizeText(node.text ?? ''));
   }
 
-  async waitFor(options?: { state?: 'visible' | 'hidden'; timeout?: number }): Promise<void> {
-    const state = options?.state ?? 'visible';
+  async waitFor(options?: { state?: WaitForState; timeout?: number }): Promise<void> {
+    rejectUnknownOptions('waitFor', options, ['state', 'timeout']);
+    const state = options?.state === undefined ? 'visible' : options.state;
+    if (!WAIT_FOR_STATES.includes(state)) {
+      throw new TestError(
+        'INVALID_ARGUMENT',
+        `waitFor state must be one of ${WAIT_FOR_STATES.join(', ')}, got ${JSON.stringify(state)}`,
+      );
+    }
     await this.context.steps.run('locator', 'locator.waitFor', `${this.label} → ${state}`, async () => {
       const { engine } = this.context;
       const deadline = engine.deadline(options?.timeout);
@@ -539,9 +572,8 @@ class LocatorImpl extends ScreenImpl implements Locator {
         signal: engine.signal,
         negated: false,
         evaluate: async () => {
-          const { node } = await engine.tryRead(this.expression, deadline);
-          const visible = isNodeVisible(node);
-          return state === 'visible' ? visible : !visible;
+          const { node } = await engine.tryRead(this.expression, deadline, ABSENCE_STATES.has(state) ? 'empty' : 'wait');
+          return inWaitForState(node, state);
         },
         onTimeout: () =>
           new TestError('LOCATOR_NOT_FOUND', `locator did not become ${state}: ${this.label}`, {

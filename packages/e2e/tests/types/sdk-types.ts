@@ -266,6 +266,10 @@ void asyncExpectation.toContainText(['a', /b/]);
 void asyncExpectation.toHaveText(['a', 1]);
 // @ts-expect-error only toHaveText and toContainText take a list; a value is one string
 void asyncExpectation.toHaveValue(['a']);
+void screen.getByRole('button').waitFor({ state: 'attached' });
+void screen.getByRole('button').waitFor({ state: 'detached', timeout: 1000 });
+// @ts-expect-error waitFor takes Playwright's four states
+void screen.getByRole('button').waitFor({ state: 'gone' });
 // Playwright's state flags and ignoreCase are taken where Playwright takes them, and nowhere else.
 void asyncExpectation.toBeChecked({ checked: false });
 void asyncExpectation.toBeVisible({ visible: false, timeout: 1000 });

@@ -13,12 +13,13 @@ import type { ModuleRegistration, RegisteredTest } from '../collect/registry.ts'
 import { selectTargets } from '../collect/select.ts';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { missingModelError, resolveAgentConfig } from '../config/agent.ts';
-import { resolveConfig, type ResolvedCredential, type ResolvedTarget } from '../config/resolve.ts';
+import { resolveConfig, type ResolvedConfig, type ResolvedCredential, type ResolvedTarget } from '../config/resolve.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import type { ReportExplore } from '../report/build.ts';
 import { labelSegment } from '../run/artifacts.ts';
 import type { RunEventSink } from '../run/events.ts';
 import { run, type RunOutcome } from '../run/runner.ts';
+import { staticSecretLedger } from '../run/secrecy.ts';
 import type { AgentConfig, BuiltinReporter, E2EConfig, RecordingMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
 import { explorerAgent, withFindingTool } from './executor.ts';
@@ -120,7 +121,7 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
   const agentName = resolved.agentNames[0]!;
   if (agentName !== 'default') notice(`exploring with agent "${agentName}"`);
 
-  const state = new ExploreState(goal, budgets);
+  const state = new ExploreState(redactGoal(goal, resolved.allSecrets), budgets);
   const explorer = explorerAgent({ state, agentName, entry: raw.agents?.[agentName], resolved: resolved.agent, notice });
   const resolvedExplorer = resolveAgentConfig(exploreAgentConfig(explorer), `agents.${agentName}`);
   // Every exploration step calls the model, a custom executor's included,
@@ -173,6 +174,24 @@ function resolveGoal(goal: string | undefined): string {
     throw new ConfigurationError('INVALID_CONFIG', `the goal must be at most ${MAX_GOAL_CHARS} characters, got ${trimmed.length}`);
   }
   return trimmed;
+}
+
+/**
+ * The goal with every static secret value it spells out redacted. The goal
+ * becomes the test's title, its artifact directory, the report's goal, and
+ * model input, so it is redacted once, here, as a test file's titles are at
+ * collection. A marker can be longer than the value it replaces, so the
+ * ceiling is checked again on what the run will keep.
+ */
+function redactGoal(goal: string, secrets: ResolvedConfig['allSecrets']): string {
+  const redacted = staticSecretLedger(secrets).redact(goal);
+  if (redacted.length > MAX_GOAL_CHARS) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `the goal must be at most ${MAX_GOAL_CHARS} characters with its secret values redacted, got ${redacted.length}`,
+    );
+  }
+  return redacted;
 }
 
 function resolveBounded(

@@ -8,6 +8,7 @@ import { setupTestId, testId } from '../internal/ids.ts';
 import { explainModuleError } from '../config/diagnose.ts';
 import { importModule } from '../config/load.ts';
 import type { ResolvedConfig } from '../config/resolve.ts';
+import { staticSecretLedger } from '../run/secrecy.ts';
 import {
   collectModule,
   groupTitles,
@@ -505,12 +506,13 @@ async function collectFiles(
 ): Promise<{ files: CollectedFile[]; uncollected: UncollectedFile[] }> {
   const files: CollectedFile[] = [];
   const uncollected: UncollectedFile[] = [];
+  const { redact } = staticSecretLedger(config.allSecrets);
   for (const file of discovered) {
     const absolutePath = path.join(config.projectRoot, file);
     const skippable = narrowed && !isSelected(file);
     let registration: ModuleRegistration;
     try {
-      registration = await collectModule(() => importModule(absolutePath, 'collect'), absolutePath);
+      registration = await collectModule(() => importModule(absolutePath, 'collect'), absolutePath, redact);
     } catch (cause) {
       if (skippable) {
         uncollected.push({ file, reason: cause instanceof CollectionError ? cause.message : explainModuleError(cause, absolutePath) });

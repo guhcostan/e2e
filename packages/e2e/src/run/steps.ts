@@ -266,7 +266,7 @@ export interface StepRecorderOptions {
   readonly onProgress?: (progress: StepProgress) => void;
   /** The project root; with it, every step and step error names the test line it came from. */
   readonly projectRoot?: string;
-  /** Replaces secret values in a step error's message and details before the record keeps them. */
+  /** Replaces secret values in a step's label, and in its error's message and details, before the record keeps them. */
   readonly redact?: (text: string) => string;
 }
 
@@ -368,10 +368,13 @@ export class StepRecorder {
   run<T>(
     kind: StepKind,
     api: string,
-    label: string,
+    rawLabel: string,
     body: () => Promise<T>,
     options: StepRunOptions = {},
   ): Promise<T> {
+    // The label is published, reported, and traced as is: a secret the test
+    // spelled into an instruction or a locator stops here, once.
+    const label = this.redact?.(rawLabel) ?? rawLabel;
     const index = this.steps.length;
     const startedAt = timestamp();
     const stack = stepStack(this.projectRoot);

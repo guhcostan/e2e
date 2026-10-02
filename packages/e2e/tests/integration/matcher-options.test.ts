@@ -66,9 +66,9 @@ test('an option toBeChecked does not take is refused', async ({ app, screen }) =
   await expect(screen.getByLabel('Notifications')).toBeChecked(flag('indeterminate', true));
 });
 
-test('an option toHaveURL does not take is refused', async ({ app, browser }) => {
+test('an option toHaveTitle does not take is refused', async ({ app, browser }) => {
   await app.open();
-  await expect(browser).toHaveURL('/', flag('ignoreCase', true));
+  await expect(browser).toHaveTitle('', flag('ignoreCase', true));
 });
 
 test('an option waitForURL does not take is refused', async ({ app, browser }) => {
@@ -114,7 +114,7 @@ describe('matcher options in a browser', () => {
 
   it.each([
     ['an option toBeChecked does not take is refused', 'expect.toBeChecked options has no key "indeterminate"'],
-    ['an option toHaveURL does not take is refused', 'expect.toHaveURL options has no key "ignoreCase"'],
+    ['an option toHaveTitle does not take is refused', 'expect.toHaveTitle options has no key "ignoreCase"'],
     ['an option waitForURL does not take is refused', 'browser.waitForURL options has no key "waitUntil"'],
   ])('%s', (title, message) => {
     const result = resultByTitle(outcome, title);

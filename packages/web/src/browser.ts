@@ -128,8 +128,8 @@ export type Cookie = CookieFields &
 export interface BrowserExpectation {
   /** Inverts the matcher. */
   readonly not: BrowserExpectation;
-  /** Waits for the current URL to match. */
-  toHaveURL(expected: string | RegExp, options?: { timeout?: number }): Promise<void>;
+  /** Waits for the current URL to match; `ignoreCase` compares a string case-insensitively and adds the `i` flag to a RegExp, `false` removes it. */
+  toHaveURL(expected: string | RegExp, options?: { ignoreCase?: boolean; timeout?: number }): Promise<void>;
   /** Waits for the current title to match. */
   toHaveTitle(expected: TextMatch, options?: { timeout?: number }): Promise<void>;
   /** Waits for the target's `class` attribute to match: a string is the whole normalized class list, a RegExp is tested against it. */
@@ -600,20 +600,24 @@ function createBrowserExpectation(deps: ExpectationDeps, negated = false): Brows
         ),
     });
   };
-  const validate = (api: string, options: object | undefined): void =>
-    rejectUnknownOptions(`expect.${negated ? 'not.' : ''}${api}`, options, ['timeout']);
+  const validate = (api: string, options: object | undefined, keys: readonly string[] = ['timeout']): void =>
+    rejectUnknownOptions(`expect.${negated ? 'not.' : ''}${api}`, options, keys);
   return {
     get not() {
       return createBrowserExpectation(deps, !negated);
     },
     toHaveURL(expected, options) {
-      validate('toHaveURL', options);
+      validate('toHaveURL', options, ['ignoreCase', 'timeout']);
+      const ignoreCase = options?.ignoreCase;
+      if (ignoreCase !== undefined && typeof ignoreCase !== 'boolean') {
+        throw new TestError('INVALID_ARGUMENT', `expect.${negated ? 'not.' : ''}toHaveURL option ignoreCase must be a boolean`);
+      }
       const label = typeof expected === 'string' ? expected : String(expected);
       const target = deps.baseHref();
       return poll(
         'toHaveURL',
-        `URL ${label}`,
-        async () => urlMatches(await deps.currentUrl(), expected, target),
+        `URL ${label}${ignoreCase === true ? ' (ignoring case)' : ''}`,
+        async () => urlMatches(await deps.currentUrl(), expected, target, ignoreCase),
         async () => `URL ${await deps.currentUrl()}`,
         options?.timeout,
       );

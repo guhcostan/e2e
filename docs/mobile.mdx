@@ -3,8 +3,8 @@ title: Testing iOS and Android
 description: Set up a simulator or emulator target, write a device test, and know what differs from the web.
 ---
 
-`@e2e-dev/mobile` runs tests on iOS simulators and Android emulators. It is
-built on [agent-device](https://github.com/callstack/agent-device).
+`@e2e-dev/mobile` runs tests on iOS simulators, Android emulators, and
+phones connected to your machine. It is built on [agent-device](https://github.com/callstack/agent-device).
 Tests use the same `agent`, `screen`, and `expect` APIs as browser tests.
 A test launches the configured app with `app.open()`; between tests the app
 stays where the last one left it.
@@ -106,6 +106,46 @@ One test launches with its own through `device.openApp`:
 await device.openApp('com.example.app', { relaunch: true, permissions: { camera: 'deny' } });
 ```
 
+### Expo development builds
+
+A development build (`expo-dev-client`) opens on the dev launcher and loads
+its JavaScript from a dev server. On an iOS simulator, launch arguments open
+the server directly and turn off the dev menu, its onboarding sheet, and its
+floating action button, so nothing covers the app. `app.command` starts the
+server for the run:
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { mobile } from '@e2e-dev/mobile';
+
+export default {
+  targets: [
+    {
+      engine: mobile({ platform: 'ios' }),
+      app: {
+        bundleId: 'com.example.app',
+        launchArguments: [
+          '--initialUrl', 'http://localhost:8081',
+          '-EXDevMenuShowsAtLaunch', 'NO',
+          '-EXDevMenuIsOnboardingFinished', 'YES',
+          '-EXDevMenuShowFloatingActionButton', 'NO',
+        ],
+        command: { executable: 'npx', args: ['expo', 'start', '--port', '8081'] },
+        readyUrl: 'http://localhost:8081/status',
+      },
+    },
+  ],
+} satisfies E2EConfig;
+```
+
+Start each test with `app.open()`: the warm-up in `prepare` passes no launch
+arguments, so it rests on the dev launcher. The first launch waits for the dev
+server to bundle the app; a test's first check may need a longer timeout than
+the rest. A test that relaunches with its own `launchArguments` replaces the
+target's, so it lists these again. expo-dev-launcher on Android does not read
+`--initialUrl`: open the server there with `device.openLink` and the build's
+`exp+<slug>://expo-development-client/?url=<encoded server URL>` link.
+
 ## Several devices
 
 Add a target for each platform:
@@ -137,6 +177,12 @@ mobile({ platform: 'ios', device: ['iPhone 17', 'iPhone 17 Pro'] })
 
 Without `device`, the engine uses booted devices up to the worker limit.
 If none are booted, it boots one. Two workers never drive the same device.
+
+## Physical devices
+
+A phone connected to your machine works as a device too: name it in
+`device`. Setup and the controls that need a simulator are on
+[Physical devices](/physical-devices).
 
 ## Hosted devices
 

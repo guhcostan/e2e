@@ -54,8 +54,9 @@ export interface MobileOptions {
   /** Platform the target's device runs. */
   readonly platform: MobilePlatform;
   /**
-   * Simulator or emulator to use, by name, simulator UDID, or emulator
-   * serial (`emulator-5554`). A list is a pool: the
+   * Device to use: a simulator or emulator by name, simulator UDID, or
+   * emulator serial (`emulator-5554`), or a connected phone by name. A list
+   * is a pool: the
    * engine declares one worker per entry and worker slot `n` drives the
    * `n`th, so `workers` at or above the pool size runs the target's files
    * across every device at once. Omitted, the pool is every booted device of

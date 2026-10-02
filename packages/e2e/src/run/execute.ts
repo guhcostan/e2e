@@ -49,7 +49,7 @@ import { isFailedStatus } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialHost, type SharedSerialSession } from './serial.ts';
 import { interruptedSkip, pairKey, pairResult, repeatSegment, unstartedResult } from './units.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, resolveSecretValue, sessionSecrecy } from './secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, redactForSession, resolveSecretValue, sessionSecrecy, staticSecretLedger } from './secrecy.ts';
 import { isSecret } from '../secrets.ts';
 import { SessionStaging, SessionStore, targetIdentity, type SessionIdentity } from './sessions.ts';
 import { redactTraceArchives } from './trace-redaction.ts';
@@ -184,6 +184,7 @@ export class TargetExecutor implements SerialHost {
       timeout: options.config.timeout,
       cleanupTimeout: options.config.cleanupTimeout,
       runErrors: this.runErrors,
+      redactTitle: staticSecretLedger(options.config.allSecrets).redact,
       debug: this.debug,
     });
     this.sessionIdentity = targetIdentity(options.target);
@@ -803,10 +804,10 @@ export class TargetExecutor implements SerialHost {
     const shared = context.kind === 'serial' ? context.shared : undefined;
     const onProgress = this.options.events?.onProgress;
     let openSession: TargetSession | null = null;
-    // Secret values the session has seen never enter an error record; the
-    // ledger is live, so a value resolved mid-attempt is covered too.
-    const redact = (text: string): string =>
-      openSession === null ? text : sessionSecrecy(openSession, this.config.allSecrets).ledger.redact(text);
+    // Secret values the session has seen never enter an error record or a
+    // step label; the ledger is live, so a value resolved mid-attempt is
+    // covered too. Before a session opens, the static values still are.
+    const redact = (text: string): string => redactForSession(openSession ?? undefined, this.config.allSecrets, text);
     const steps = new StepRecorder(attemptId, {
       attempt: { id: shared?.attemptId ?? attemptId, index: attemptIndex },
       maxEventsPerStep: this.config.limits.maxEventsPerStep,

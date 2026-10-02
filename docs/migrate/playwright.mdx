@@ -149,8 +149,7 @@ what to do today.
 | `isChecked()` | the same on a checkbox, radio, or `aria-checked` node; `false` on any other node, where Playwright throws | by design |
 | `isHidden()`, `isDisabled()` | the same | same |
 | `isEditable()` | not yet | missing |
-| `waitFor({ state: 'visible' })`, `'hidden'` | the same | same |
-| `waitFor({ state: 'attached' })`, `'detached'` | not yet; `expect(locator).toBeAttached()` and `.not.toBeAttached()` | missing |
+| `waitFor({ state: 'visible' })`, `'hidden'`, `'attached'`, `'detached'` | the same | same |
 | `locator.evaluate(fn)`, `evaluateAll(fn)` | not yet; `browser.evaluate(fn, selector)` with a CSS selector argument | missing |
 | `locator.screenshot()` | not yet; `app.screenshot(label)` captures the viewport | missing |
 | `innerHTML()`, `dispatchEvent()`, `selectText()`, `blur()`, `highlight()` | not yet; `browser.evaluate` | missing |
@@ -173,14 +172,14 @@ what to do today.
 | `toHaveText(['a', 'b'])`, `toContainText([...])` on several matches | the same: `toHaveText` needs the count to match, `toContainText` an ordered subsequence | same |
 | `toBeChecked({ checked: false })`, `toBeEnabled({ enabled })`, `toBeVisible({ visible })`, `toBeAttached({ attached })` | the same | same |
 | `{ ignoreCase }` on `toHaveText()`, `toContainText()`, `toHaveAccessibleName()`, `toHaveAttribute(name, value)` | the same | same |
-| `toBeChecked({ indeterminate })`, `{ useInnerText }`, `toHaveURL(url, { ignoreCase })` | not yet; `INVALID_ARGUMENT`, so the matcher never passes on its default | missing |
+| `toBeChecked({ indeterminate })`, `{ useInnerText }` | not yet; `INVALID_ARGUMENT`, so the matcher never passes on its default | missing |
 | `toHaveAttribute('aria-selected', 'true')`, `'aria-expanded'` | `toBeSelected()`, `toBeExpanded()` | renamed |
 | a positive matcher on several matches | `LOCATOR_AMBIGUOUS` at once; narrow with `filter`, `first`, or `{ visible: true }` | by design |
 | `toBeAttached()` | the same; passes on a hidden match too | same |
 | `toBeEmpty()`, `toBeInViewport()`, `toBeEditable()`, `toHaveRole()`, `toHaveAccessibleDescription()` | not yet | missing |
 | `expect(locator).toHaveClass(cls)` | `expect(browser).toHaveClass(locator, cls)`; a DOM fact is asserted through `browser`; reads the `class` attribute, so `''` matches `class=""` and not a missing attribute | web only |
 | `toHaveCSS()`, `toHaveId()`, `toHaveJSProperty()`, `toContainClass()`, `toHaveValues()` | not yet; `browser.evaluate` plus a value matcher | missing |
-| `expect(page).toHaveURL()`, `toHaveTitle()` | `expect(browser).toHaveURL()`, `toHaveTitle()` | web only |
+| `expect(page).toHaveURL()`, `toHaveTitle()` | `expect(browser).toHaveURL()`, `toHaveTitle()`; `toHaveURL` takes `ignoreCase` | web only |
 | `toHaveScreenshot()`, `toMatchSnapshot()` | not yet; `agent.assert('...', { vision: true })` is a judgment, not a pixel diff | missing |
 | `toMatchAriaSnapshot()` | not yet | missing |
 | `expect(value).toBe()`, `toEqual()`, `toMatch()`, `toBeTruthy()`, `toBeCloseTo()` and the rest | the same, except `toContain`, below, see [value matchers](/reference/expect#value-matchers) | same |

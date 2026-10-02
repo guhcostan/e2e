@@ -140,6 +140,15 @@ describe('urlMatches', () => {
     expect(urlMatches('http://localhost:3000/alpha', /beta/, base.href)).toBe(false);
   });
 
+  it('ignoreCase folds a string comparison and sets or clears the i flag of a regexp', () => {
+    expect(urlMatches('http://localhost:3000/Billing', '/billing', base.href)).toBe(false);
+    expect(urlMatches('http://localhost:3000/Billing', '/billing', base.href, true)).toBe(true);
+    expect(urlMatches('http://localhost:3000/Billing', '/billing', base.href, false)).toBe(false);
+    expect(urlMatches('http://localhost:3000/Billing', /billing$/, base.href, true)).toBe(true);
+    expect(urlMatches('http://localhost:3000/Billing', /billing$/i, base.href)).toBe(true);
+    expect(urlMatches('http://localhost:3000/Billing', /billing$/i, base.href, false)).toBe(false);
+  });
+
   it('rejects a predicate instead of matching every URL', () => {
     const predicate = ((url: URL) => url.pathname === '/other') as unknown as RegExp;
     expect(() => urlMatches('http://localhost:3000/items', predicate, base.href)).toThrow(

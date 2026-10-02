@@ -224,6 +224,60 @@ describe('e2e explore', () => {
     expect((outcome as unknown as { notices: string[] }).notices).toEqual([]);
   }, 120_000);
 
+  it('redacts a registered secret value the goal spells out from the title, artifact names, report, and model input', async () => {
+    const value = 'goal-Secret-5Tq8Wz';
+    const goal = `Explore the home page with key ${value}`;
+    let plans = 0;
+    const model = installExploreModel({
+      plan: () => {
+        plans += 1;
+        return plans === 1
+          ? { decision: 'step', title: 'Counter', instruction: 'Look at the counter' }
+          : { decision: 'finish', summary: 'One issue.' };
+      },
+      loop: (call) =>
+        call.turn === 1
+          ? [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }]
+          : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Looked' } }],
+    });
+    const outcome = await explore({
+      cwd: project.dir,
+      rawConfig: {
+        targets: [{ name: 'web', engine: web(), app: { url: app.url } }] as never,
+        agents: { default: { model } },
+        secrets: { probe: value },
+      },
+      goal,
+      maxSteps: 1,
+      timeoutMs: 180_000,
+    });
+    const result = outcome.report.run.results[0]!;
+    expect(result.titlePath).toEqual(['Explore the home page with key <secret:probe>']);
+    expect(outcome.report.run.explore!.goal).toBe('Explore the home page with key <secret:probe>');
+    expect(fakeCalls[0]!.system).toContain('Exploration goal: Explore the home page with key <secret:probe>');
+    // The explorer's loop ran, carrying the goal as context.
+    expect(loopCalls.length).toBeGreaterThan(0);
+    expect(loopCalls[0]!.system).toContain('Exploration goal: Explore the home page with key <secret:probe>');
+    const paths = result.attempts[0]!.artifacts.map((artifact) => artifact.path ?? '');
+    expect(paths.some((entry) => entry.startsWith('web/explore-the-home-page-with-key-secret-'))).toBe(true);
+    expect(JSON.stringify([outcome.report, fakeCalls, loopCalls])).not.toContain(value);
+    expect(readFileSync(path.join(project.dir, '.e2e', 'report.json'), 'utf8')).not.toContain(value);
+
+    // A goal at the ceiling that the markers push past it is refused before anything starts.
+    const long = `${'a'.repeat(2_000 - value.length - 1)} ${value}`;
+    await expect(
+      explore({
+        cwd: project.dir,
+        rawConfig: {
+          targets: [{ name: 'web', engine: web(), app: { url: app.url } }] as never,
+          agents: { default: { model } },
+          secrets: { 'a-long-secret-name': value },
+        },
+        goal: long,
+      }),
+    ).rejects.toThrow('the goal must be at most 2000 characters with its secret values redacted, got 2009');
+  }, 120_000);
+
   it('says to pass --trace on and --video on when a retry mode would record nothing, explore running once', async () => {
     const model = installExploreModel({
       plan: () => ({ decision: 'finish', summary: 'Nothing here.' }),

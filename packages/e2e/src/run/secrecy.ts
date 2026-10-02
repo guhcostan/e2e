@@ -70,6 +70,28 @@ export class SecretExposure {
  */
 export const processSecrets = new SecretLedger();
 
+/** The static ledger of each secrets map, built once. */
+const staticLedgers = new WeakMap<ResolvedConfig['allSecrets'], SecretLedger>();
+
+/**
+ * A ledger of the static values of `secrets` alone, built once per map. What
+ * text produced before any session exists is redacted with, such as a test
+ * title at collection: every process resolving the same config redacts it
+ * alike, so a test's id agrees between the runner and its workers. A
+ * provider-backed value is not known yet and is not in it. Shared, so it is
+ * handed out read-only: nothing registers into it.
+ */
+export function staticSecretLedger(secrets: ResolvedConfig['allSecrets']): Pick<SecretLedger, 'redact' | 'entries'> {
+  let ledger = staticLedgers.get(secrets);
+  if (ledger === undefined) {
+    ledger = new SecretLedger(
+      [...secrets].flatMap(([name, { value }]) => (typeof value === 'string' ? [[name, value] as const] : [])),
+    );
+    staticLedgers.set(secrets, ledger);
+  }
+  return ledger;
+}
+
 /** Seeds `processSecrets` with the static values of `secrets`, so output before any session opens is covered too. */
 export function registerStaticSecrets(secrets: ResolvedConfig['allSecrets']): void {
   for (const [name, { value }] of secrets) {
@@ -136,16 +158,25 @@ export function sessionSecrecy(
   if (secrecy === undefined) {
     registerStaticSecrets(secrets);
     secrecy = {
-      ledger: new SecretLedger(
-        [...secrets].flatMap(([name, { value }]) =>
-          typeof value === 'string' ? [[name, value] as const] : [],
-        ),
-      ),
+      ledger: new SecretLedger(staticSecretLedger(secrets).entries()),
       exposure: new SecretExposure(),
     };
     secrecyBySession.set(session, secrecy);
   }
   return secrecy;
+}
+
+/**
+ * Redacts `text` with every value `session` has seen, or with the static
+ * values while no session is open yet, so text an attempt produces before
+ * its session exists (a step label, a fixture error) is covered too.
+ */
+export function redactForSession(
+  session: TargetSession | undefined,
+  secrets: ResolvedConfig['allSecrets'],
+  text: string,
+): string {
+  return (session === undefined ? staticSecretLedger(secrets) : sessionSecrecy(session, secrets).ledger).redact(text);
 }
 
 /** What a saved session carries of the secrecy of the attempt that saved it. */

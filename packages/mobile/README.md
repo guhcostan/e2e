@@ -1,8 +1,8 @@
 # @e2e-dev/mobile
 
 The mobile engine for [`e2e`](https://www.npmjs.com/package/e2e), built on
-[agent-device](https://github.com/callstack/agent-device): iOS simulators and
-Android emulators through the same `e2e/engine` contract the browser engine
+[agent-device](https://github.com/callstack/agent-device): iOS simulators,
+Android emulators, and connected phones through the same `e2e/engine` contract the browser engine
 implements. A test written against `screen`, `expect`, `app`, and `agent` runs
 on a device target unchanged; nothing in `e2e` core knows this package exists.
 
@@ -18,7 +18,8 @@ npm install --save-dev e2e @e2e-dev/mobile
 ```
 
 `agent-device` needs Xcode with an iOS simulator runtime, or the Android SDK
-with an emulator. Run `npx agent-device doctor` once before handing the target
+with an emulator. A phone needs Developer Mode and runner signing on iOS, or
+USB debugging authorized on Android (see [Physical devices](https://e2e.tester.army/docs/physical-devices)). Run `npx agent-device doctor` once before handing the target
 to the runner.
 
 ```ts title="e2e.config.ts"
@@ -68,7 +69,7 @@ the other old app options are `INVALID_CONFIG` naming their key under `app`.
 | Option | Meaning |
 | --- | --- |
 | `platform` | `'ios'` or `'android'`. |
-| `device` | Simulator or emulator name or UDID. A list is a pool: one worker per entry, worker slot `n` driving the `n`th. Omitted, every booted device of the platform is the pool, as many as the run has slots. |
+| `device` | Simulator or emulator name or UDID, or a connected phone's name. A list is a pool: one worker per entry, worker slot `n` driving the `n`th. Omitted, every booted device of the platform is the pool, as many as the run has slots. |
 | `session` | agent-device session name, before the worker slot: slot `n` drives its device under `<session>-<n>`, `e2e-<target name>-<n>` by default. One run per session at a time. |
 | `snapshot` | `'full'` (default, includes static text) or `'interactive'` (actionable nodes only). |
 | `settle` | For agent actions: milliseconds the UI must hold still after an action before the agent observes again, default `150`; `false` skips the wait. A test's own steps never settle; `expect` verifies their outcome. |

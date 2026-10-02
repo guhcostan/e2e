@@ -49,6 +49,12 @@ test('a negated matcher waits for the flip, then the grace window', async ({ app
   await screen.getByRole('status', { name: 'Loading' }).waitFor({ state: 'hidden' });
 });
 
+test('waitFor attached and detached read presence, not visibility', async ({ app, screen }) => {
+  await app.open('/');
+  await screen.getByText('Hidden content').waitFor({ state: 'attached' });
+  await screen.getByText('Never rendered').waitFor({ state: 'detached' });
+});
+
 test('a missing node is LOCATOR_NOT_FOUND after the deadline', async ({ app, screen }) => {
   await app.open('/');
   await screen.getByRole('button', { name: 'Never exists' }).tap({ timeout: 250 });
@@ -105,6 +111,14 @@ describe('scripted engine: polling, staleness, failure mapping, and scrolling', 
     expect(step(held, 'expect.not.toBeVisible').durationMs).toBeGreaterThanOrEqual(900);
     const flipped = passed(run.outcome, 'a negated matcher waits for the flip, then the grace window');
     expect(step(flipped, 'expect.not.toBeVisible').durationMs).toBeGreaterThanOrEqual(1_150);
+  });
+
+  it('waits for presence with the attached and detached states', () => {
+    const attempt = passed(run.outcome, 'waitFor attached and detached read presence, not visibility');
+    expect(attempt.steps.filter((entry) => entry.api === 'locator.waitFor').map((entry) => entry.label)).toEqual([
+      'getByText("Hidden content") → attached',
+      'getByText("Never rendered") → detached',
+    ]);
   });
 
   it('reports a missing node after the deadline and an ambiguous one at once', () => {

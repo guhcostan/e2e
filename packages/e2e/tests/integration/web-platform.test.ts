@@ -422,6 +422,18 @@ test('a nested absent frame counts as zero matches at once', async ({ app, brows
   expect(Date.now() - started).toBeLessThan(2_000);
 });
 
+test('absence matchers and waits under an absent frame pass at once', async ({ app, browser }) => {
+  await app.open('/frame');
+  const absent = browser.frameLocator('#absent').getByRole('button');
+  const started = Date.now();
+  await expect(absent).toBeAttached({ attached: false, timeout: 3000 });
+  await expect(absent).toBeVisible({ visible: false, timeout: 3000 });
+  await expect(absent).toBeHidden({ timeout: 3000 });
+  await absent.waitFor({ state: 'detached', timeout: 3000 });
+  await absent.waitFor({ state: 'hidden', timeout: 3000 });
+  expect(Date.now() - started).toBeLessThan(2_000);
+});
+
 test('an action under an absent frame polls for the frame until its timeout', async ({ app, browser }) => {
   await app.open('/frame');
   await browser.frameLocator('#absent').getByRole('button').tap({ timeout: 800 });
@@ -643,6 +655,7 @@ describe('web platform integration', () => {
       'dialogs are handled by registered handlers',
       'frame locators scope queries into iframes',
       'a nested absent frame counts as zero matches at once',
+      'absence matchers and waits under an absent frame pass at once',
       'nested frame locators resolve each frame inside the one before it',
       'css selectors via browser.locator',
       'contenteditable hosts are textboxes: reached by label, filled, and read as a value',
