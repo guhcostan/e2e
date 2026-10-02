@@ -170,6 +170,39 @@ Some compatible endpoints validate strictly and reject the structured `instructi
 and `criteria` objects the native APIs accept. The executor therefore sends instructions as one labeled string and criteria as a string-valued record: plain strings
 throughout, no nested objects. The native APIs accept this shape too.
 
+## Benchmark: LLM agent vs decision model
+
+The same todo flow runs under two configs against the same app and engine:
+`act drives a multi-action todo flow` in `apps/testbed/tests-agent/act.e2e.ts`
+(add "Buy milk" and "Walk the dog", mark "Buy milk" done, all assertions
+deterministic). One side uses the default agent executor with an LLM, the
+other uses `decisionExecutor`:
+
+- `apps/testbed/e2e.bench-luna.config.ts`: the default executor with luna
+  served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
+- `apps/testbed/e2e.bench-clef.config.ts`: `decisionExecutor` with `clef()`
+  (Clef-flash) from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`.
+
+```bash
+node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1 --no-cache
+CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-clef.config.ts tests-agent/act.e2e.ts --grep multi-action --workers 1 --no-cache
+```
+
+![Todo flow end state](/images/bench-todo-flow.png)
+
+### Results
+
+One run each, same machine, `--no-cache` so every step spends real model
+calls. N=1: treat the timings as a smoke comparison, not a measurement.
+
+| Side | Model | Result | Wall time | Model calls | Tokens in/out |
+| --- | --- | --- | --- | --- | --- |
+| LLM agent | `gpt-6-luna` via OpenCodeX | passed | 23s | 6 | 26,872 / 168 |
+| Decision model | `clef-flash` via Cloudflare | pending | - | - | - |
+
+`apps/testbed/scripts/opencodex-probe.mjs` probes candidate OpenCodeX
+models without spending a full run.
+
 ## Current limits
 
 - This executor uses semantic text only, including with Clef. Screenshots,
