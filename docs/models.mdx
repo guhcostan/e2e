@@ -8,9 +8,9 @@ Agent steps use the model configured in `e2e.config.ts`. You can use an
 `e2e init` offers these choices and writes the config for you. For the first
 setup, follow the [quickstart](/quickstart#use-a-subscription-or-api-key).
 
-Tests without agent steps do not need a model. [Decision models](/decision-models)
-such as Clef and Jev can drive bounded actions and judge assertions through a custom executor. For the built-in agent,
-choose a model that supports tool calls and images. Agent steps need the `ai`
+Tests without agent steps do not need a model. [Decision models](/decision-models), hosted or locally
+hosted, such as Clef or Jev, can drive bounded actions and judge assertions through a custom executor. For the built-in agent,
+choose a model that supports tool calls and images. Steps using the built-in agent need the `ai`
 package installed, whichever provider you use:
 
 <CodeGroup>

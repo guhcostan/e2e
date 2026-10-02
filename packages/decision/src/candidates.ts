@@ -10,8 +10,10 @@ export interface Candidate {
   run(): Promise<void>;
 }
 
-const tappable = new Set(['button', 'link', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'option', 'treeitem']);
+const tappable = new Set(['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox', 'radio', 'switch', 'option', 'treeitem']);
 const editable = new Set(['textbox', 'searchbox', 'spinbutton', 'combobox']);
+/** Roles the runner authorizes as secret sinks: spinbuttons carry a value but take no typed secret fill. */
+const secretEditable = new Set(['textbox', 'searchbox', 'combobox']);
 
 /** Enumerates the bounded grammar supported by the target without generating values or selectors. */
 export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candidate[] {
@@ -27,7 +29,9 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
       if (ctx.target.verbs.has('tap') && tappable.has(node.role ?? '')) {
         result.push({ description: `tap ${label(node)}`, run: () => ctx.actions.tap(target) });
       }
-      if (editable.has(node.role ?? '') && node.attributes?.['readonly'] !== 'true') {
+      const readonlyAttr = node.attributes?.['readonly'];
+      const ariaReadonly = node.attributes?.['aria-readonly'];
+      if (editable.has(node.role ?? '') && readonlyAttr === undefined && ariaReadonly !== 'true') {
         if (node.inputPurpose !== 'password' && !node.states?.secure && ctx.target.verbs.has('type')) {
           for (const [param, value] of values) {
             if (node.value !== value) {
@@ -35,7 +39,7 @@ export function candidates(ctx: StepExecutorContext, tree: ExecutorNode): Candid
             }
           }
         }
-        if (ctx.target.verbs.has('typeSecret')) {
+        if (secretEditable.has(node.role ?? '') && ctx.target.verbs.has('typeSecret')) {
           for (const secret of ctx.step.secrets) {
             if (secret.purpose !== 'password' || node.inputPurpose === 'password') {
               result.push({ description: `typeSecret ${JSON.stringify(secret.name)} into ${label(node)}`, run: () => ctx.actions.typeSecret(target, secret.name) });

@@ -101,14 +101,20 @@ export function jev(options: JevOptions): DecisionModel {
 
 /** Validates custom transports too; a malformed or out-of-domain answer never authorizes an action. */
 export function validateDecision(result: DecisionResult, criteria: Readonly<Record<string, string>>): void {
+  const invalid = () => new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
+  if (result === null || typeof result !== 'object') throw invalid();
+  const probabilities = (result as { probabilities?: unknown }).probabilities;
+  if (probabilities === null || typeof probabilities !== 'object') throw invalid();
+  const distribution = probabilities as Record<string, number>;
   const keys = Object.keys(criteria);
-  const values = keys.map((key) => result.probabilities[key]);
+  const values = keys.map((key) => distribution[key]);
   const valid = Object.hasOwn(criteria, result.choice) &&
-    Object.keys(result.probabilities).length === keys.length &&
+    Object.keys(distribution).length === keys.length &&
+    Object.keys(distribution).every((key) => Object.hasOwn(criteria, key)) &&
     values.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) &&
     Number.isFinite(result.confidence) && result.confidence >= 0 && result.confidence <= 1;
   if (!valid || Math.abs(values.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 1) > 0.001 ||
-    result.probabilities[result.choice] !== Math.max(...values.map((value) => value ?? 0))) {
+    distribution[result.choice] !== Math.max(...values.map((value) => value ?? 0))) {
     throw new AgentError('MODEL_OUTPUT_INVALID', 'The decision response contains an invalid choice or probability distribution.');
   }
 }

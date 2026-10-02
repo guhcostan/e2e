@@ -46,7 +46,11 @@ async function contents(directory: string): Promise<string[]> {
   return result;
 }
 
-describe('decision executors through the built CLI and real Chromium', () => {
+// The CLI child boots with module customization hooks, which need Node 22.15+, 23.5+, or 24+.
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+const major = nodeMajor ?? 0; const minor = nodeMinor ?? 0;
+const moduleHooksSupported = major > 23 || (major === 23 && minor >= 5) || (major === 22 && minor >= 15);
+describe.runIf(moduleHooksSupported)('decision executors through the built CLI and real Chromium', () => {
   let directory: string;
   let app: Server;
   let provider: Server;

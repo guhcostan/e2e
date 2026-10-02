@@ -28,8 +28,8 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       /**
        * Makes exactly one request, recording failed requests and enforcing
        * the call ceiling before transport. Instructions stay a labeled
-       * string and criteria string-valued: gateways in front of a System
-       * One API may reject structured values the native API accepts.
+       * string and criteria string-valued: some compatible endpoints
+       * may reject structured values the native API accepts.
        */
       const decide = async (observation: ExecutorObservation, criteria: Readonly<Record<string, string>>, question: string, feedback = ''): Promise<DecisionResult> => {
         ctx.signal.throwIfAborted();
@@ -83,7 +83,10 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
       while (calls < ctx.budgets.maxModelCalls) {
         const observation = await ctx.observe({ tree: ctx.step.kind === 'act' });
         if (observation.treeUnavailable || observation.truncated || !observation.text.trim()) {
-          return inconclusive('A complete semantic observation is required.');
+          // Assertions fail inconclusive; actions block: there is nothing to judge or do.
+          return ctx.step.kind === 'assert'
+            ? inconclusive('A complete semantic observation is required.')
+            : blocked('A complete semantic observation is required.');
         }
         if (ctx.step.kind === 'assert') return judge(observation);
         if (!observation.tree) return blocked('The engine did not provide a semantic node tree.');
@@ -100,8 +103,14 @@ export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor
         if (result.choice === 'complete') {
           if (calls >= ctx.budgets.maxModelCalls) break;
           const fresh = await ctx.observe();
-          if (fresh.treeUnavailable || fresh.truncated || !fresh.text.trim()) return inconclusive('A complete semantic observation is required.');
-          return judge(fresh);
+          if (fresh.treeUnavailable || fresh.truncated || !fresh.text.trim()) return blocked('A complete semantic observation is required.');
+          const verdict = await judge(fresh);
+          // ASSERTION_INCONCLUSIVE is the assert step's code: an act step whose
+          // completion cannot be verified blocks instead of failing an assertion.
+          if (verdict.status === 'failed' && verdict.errorCode === 'ASSERTION_INCONCLUSIVE') {
+            return blocked('Completion could not be verified: ' + verdict.summary);
+          }
+          return verdict;
         }
         const candidate = available[Number(result.choice.slice(1))];
         if (!candidate) throw new AgentError('MODEL_OUTPUT_INVALID', 'The decision did not name an available action.');

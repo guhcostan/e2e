@@ -80,11 +80,27 @@ describe('portable decision executor', () => {
 
   it.each([
     { truncated: true }, { treeUnavailable: true as const }, { text: '' },
-  ])('requires a complete semantic observation', async (observation) => {
+  ])('fails an assertion without a complete semantic observation', async (observation) => {
+    const fixture = context({ kind: 'assert', observation });
+    const decide = vi.fn<DecisionModel['decide']>();
+    expect(await decisionExecutor({ model: model(decide) }).runStep(fixture.ctx)).toMatchObject({ status: 'failed', errorCode: 'ASSERTION_INCONCLUSIVE' });
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { truncated: true }, { treeUnavailable: true as const }, { text: '' },
+  ])('blocks an action without a complete semantic observation', async (observation) => {
     const fixture = context({ observation });
     const decide = vi.fn<DecisionModel['decide']>();
-    expect(await decisionExecutor({ model: model(decide) }).runStep(fixture.ctx)).toMatchObject({ errorCode: 'ASSERTION_INCONCLUSIVE' });
+    expect(await decisionExecutor({ model: model(decide) }).runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
     expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('blocks an act step whose completion cannot be verified', async () => {
+    const fixture = context();
+    let turn = 0;
+    const executor = decisionExecutor({ model: model(async (request) => answer(request, turn++ === 0 ? 'complete' : 'inconclusive')) });
+    expect(await executor.runStep(fixture.ctx)).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
   });
 
   it('enforces the model-call ceiling before an additional request', async () => {
@@ -156,6 +172,14 @@ describe('portable decision executor', () => {
     expect(fixture.usage).toHaveLength(1);
   });
 
+  it.each(['null body', 'null distribution'])('rejects %s as invalid output', async (shape) => {
+    const fixture = context({ kind: 'assert' });
+    const executor = decisionExecutor({ model: model(async (request) =>
+      shape === 'null body' ? (null as unknown as DecisionResult)
+      : { ...answer(request, 'holds'), probabilities: null as unknown as Record<string, number> }) });
+    await expect(executor.runStep(fixture.ctx)).rejects.toMatchObject({ code: 'MODEL_OUTPUT_INVALID' });
+    expect(fixture.usage).toHaveLength(1);
+  });
   it('records a failed request without tokens or provider exception text', async () => {
     const fixture = context({ kind: 'assert' });
     const error = new AgentError('MODEL_PROVIDER_FAILED', 'HTTP 401');

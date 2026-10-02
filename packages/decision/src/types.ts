@@ -2,7 +2,7 @@ import type { JsonValue } from 'e2e';
 
 /**
  * One bounded choice. Descriptions and instructions are plain strings:
- * gateways in front of a System One API may reject structured values.
+ * some compatible endpoints may reject structured values.
  * The binding of verb, node, and arguments stays in code; the model
  * only ever sees the choice id and its description string.
  */

@@ -24,7 +24,7 @@ Subscription logins and local models:
 [setup](setup.md#subscriptions-and-api-keys). Keep `ai@^7` installed with
 any provider.
 
-Clef, Clef-flash, and Jev use the System One decision API. Install
+Decision models use a choice API over HTTP: Clef, Clef-flash, and Jev speak the System One decision API, and a locally hosted model works too. Install
 `@e2e-dev/decision` and put `decisionExecutor({ model: clef({ accountId, apiKey }) })`
 or `decisionExecutor({ model: jev({ apiKey }) })` under `executor`, not the
 agents entry's `model` or `judge`. They can run semantic `act` and `assert`
