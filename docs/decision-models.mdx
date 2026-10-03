@@ -386,11 +386,14 @@ Both checkpoints also ran locally on an M1 Mac through `laya-serve` 0.3.24
 (PyTorch 2.14.1, MPS, per-call inference 85–250ms; the wall time is dominated
 by the browser observations, as on every row). The english checkpoint and the
 `typed-decisions` checkpoint each fail 0/5 the same way: they fixate on
-`navigate to "Buy milk"`, repeating it to the 25-call budget without ever
-typing. Isolated probes show the same indecision (english: navigate 0.27 over
+`navigate to "Buy milk"`, choosing it 12 times across 25 model calls until
+the call budget runs out without ever typing. The third-selection guard keys
+on identical screen text, and each navigation returned an observation a few
+bytes off the last (39–41 bytes), so it never fired. Isolated probes show
+the same indecision (english: navigate 0.27 over
 a flat field at confidence 0.03; typed-decisions: tap 0.41 at confidence
 0.04), so this is the model not knowing the answer, not a transport problem.
-Local runs cost no tokens and no credits. Laya bills one
+Local runs cost no money and no credits. Laya bills one
 credit per input token ($0.0357/M) and does not bill failed requests; a
 cloud five-run row at the 12.3k tokens per run Clef needed is about 62k
 credits, roughly $0.002.
