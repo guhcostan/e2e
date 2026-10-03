@@ -32,7 +32,7 @@ export interface ActionSpace {
   /** Per operation: target key -> bound target. Only operations with at least one target appear. */
   readonly targets: ReadonlyMap<Operation, ReadonlyMap<string, Target>>;
   readonly controls: ReadonlyMap<Control, Target>;
-  /** Elements and select options left out to stay under the per-question cap. */
+  /** Elements left out to stay under the per-question cap; scrolling can bring them into view. */
   readonly omitted: number;
   /** Non-interactive page text from the tree, without node ids, clipped to 6000 chars. */
   readonly pageText: string;
@@ -43,13 +43,29 @@ export interface ActionSpace {
 /** TypeSafe's per-question choice limit; the AI SDK itself has none. */
 const MAX_CHOICES = 255;
 
-const tappable = new Set(['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'option', 'treeitem']);
+const tappable = new Set([
+  'button',
+  'link',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'tab',
+  'option',
+  'treeitem',
+]);
 const typable = new Set(['textbox', 'searchbox', 'spinbutton', 'combobox']);
 const secretTypable = new Set(['textbox', 'searchbox', 'combobox']);
 const checkable = new Set(['checkbox', 'radio', 'switch']);
 
+/** The parts of an observation the action space reads. */
+interface SpaceObservation {
+  readonly path?: string;
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly tree: ExecutorNode;
+}
+
 /** Builds the element table and bound targets from the newest observation. */
-export function actionSpace(ctx: StepExecutorContext, observation: { path?: string; viewport: { width: number; height: number }; tree: ExecutorNode }, canType: boolean): ActionSpace {
+export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservation, canType: boolean): ActionSpace {
   const verbs = ctx.target.verbs;
   interface Row {
     node: ExecutorNode;
@@ -66,21 +82,26 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
       const password = node.inputPurpose === 'password' || node.states?.secure === true;
       const nativeSelect = role === 'combobox' && (node.children ?? []).some((child) => child.role === 'option');
       const childSelect = underNativeSelect || nativeSelect;
+      const checkedRadio = role === 'radio' && node.states?.checked === true;
       if (verbs.has('tap') && tappable.has(role) && !checkable.has(role) && !(role === 'option' && childSelect)) {
         operations.push('tap');
       }
       if (typable.has(role) && !nativeSelect) {
         if (!password && verbs.has('type') && canType) operations.push('type');
-        if (verbs.has('typeSecret') && secretTypable.has(role) && ctx.step.secrets.length > 0) operations.push('typeSecret');
+        if (verbs.has('typeSecret') && secretTypable.has(role) && ctx.step.secrets.length > 0) {
+          operations.push('typeSecret');
+        }
         if (!password && verbs.has('press')) operations.push('submit');
       }
       if (verbs.has('select') && nativeSelect) operations.push('select');
-      if (verbs.has('check') && checkable.has(role)) operations.push('check');
+      // `check` toggles, so a checked radio would be unchecked: offer radios only when unchecked.
+      if (verbs.has('check') && checkable.has(role) && !checkedRadio) operations.push('check');
       if (operations.length > 0) {
         rows.push({ node, operations, inViewport: intersects(node, observation.viewport) });
       } else {
         const text = node.name ?? node.attributes?.['placeholder'] ?? node.text ?? '';
-        if (text.trim() !== '') pageText.push(text);
+        // A checked radio leaves the table, so its state rides on the page text.
+        if (text.trim() !== '') pageText.push(checkedRadio ? `${text} (checked)` : text);
       }
     }
     for (const child of node.children ?? []) visit(child, underNativeSelect || node.role === 'combobox');
@@ -96,7 +117,6 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
   const kept = ordered.slice(0, MAX_CHOICES);
   const targets = new Map<Operation, Map<string, Target>>();
   let selectCount = 0;
-  let selectOverflow = 0;
   const elements: Element[] = kept.map((row, position) => {
     const index = String(position + 1);
     const label = clip(nodeLabel(row.node), 120);
@@ -109,11 +129,9 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
           // select cannot perform it, so the model must never see it.
           if (child.states?.hidden === true || child.states?.disabled === true) continue;
           // Every select shares one target group and one question, so options
-          // count against the same per-question cap as elements.
-          if (selectCount >= MAX_CHOICES) {
-            selectOverflow += 1;
-            continue;
-          }
+          // stop at the per-question cap. They stay out of `omitted`: scrolling
+          // never reveals an option the cap dropped.
+          if (selectCount >= MAX_CHOICES) continue;
           const key = `${index}:${optionIndex}`;
           const optionLabel = child.name ?? child.text ?? '';
           options.set(key, {
@@ -123,7 +141,11 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
           });
           selectCount += 1;
         }
-        if (options.size > 0) targets.set('select', new Map([...(targets.get('select') ?? new Map<string, Target>()), ...options]));
+        if (options.size > 0) {
+          const group = targets.get('select') ?? new Map<string, Target>();
+          for (const [key, target] of options) group.set(key, target);
+          targets.set('select', group);
+        }
       } else {
         const key = index;
         const target: Target = bind(row.node, operation, label, ctx);
@@ -147,38 +169,34 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
     controls.set('scroll_up', { description: 'scroll viewport up', run: () => ctx.actions.scroll('up') });
     controls.set('scroll_down', { description: 'scroll viewport down', run: () => ctx.actions.scroll('down') });
   }
-  if (verbs.has('back')) controls.set('back', { description: 'back one step in history', run: () => ctx.actions.back() });
+  if (verbs.has('back')) {
+    controls.set('back', { description: 'back one step in history', run: () => ctx.actions.back() });
+  }
   return {
     elements,
     targets,
     controls,
-    omitted: omitted + selectOverflow + droppedOptions(ordered),
+    omitted,
     pageText: clip(pageText.join('\n'), 6000),
     fingerprint: fingerprint(observation.path ?? '', observation.tree),
   };
 }
 
-/** Enabled options inside rows dropped past the element cap: also unavailable choices. */
-function droppedOptions(ordered: readonly { node: ExecutorNode; operations: Operation[] }[]): number {
-  let count = 0;
-  for (const row of ordered.slice(MAX_CHOICES)) {
-    if (!row.operations.includes('select')) continue;
-    for (const child of row.node.children ?? []) {
-      if (child.role === 'option' && child.states?.hidden !== true && child.states?.disabled !== true) count += 1;
-    }
-  }
-  return count;
-}
-
 /** Binds one element operation to the runner's actions. */
 function bind(node: ExecutorNode, operation: Operation, label: string, ctx: StepExecutorContext): Target {
   const target = { id: node.id };
+  const where = `${label} [${node.id}]`;
   switch (operation) {
-    case 'tap': return { description: `tap ${label} [${node.id}]`, run: () => ctx.actions.tap(target) };
-    case 'type': return { description: `type into ${label} [${node.id}]`, run: (argument = '') => ctx.actions.type(target, argument) };
-    case 'typeSecret': return { description: `typeSecret into ${label} [${node.id}]`, run: (argument = '') => ctx.actions.typeSecret(target, argument) };
-    case 'submit': return { description: `submit ${label} [${node.id}]`, run: () => ctx.actions.press(target, 'Enter') };
-    case 'check': return { description: `check ${label} [${node.id}]`, run: () => ctx.actions.check(target, !(node.states?.checked ?? false)) };
+    case 'tap':
+      return { description: `tap ${where}`, run: () => ctx.actions.tap(target) };
+    case 'type':
+      return { description: `type into ${where}`, run: (argument = '') => ctx.actions.type(target, argument) };
+    case 'typeSecret':
+      return { description: `typeSecret into ${where}`, run: (argument = '') => ctx.actions.typeSecret(target, argument) };
+    case 'submit':
+      return { description: `submit ${where}`, run: () => ctx.actions.press(target, 'Enter') };
+    case 'check':
+      return { description: `check ${where}`, run: () => ctx.actions.check(target, !(node.states?.checked ?? false)) };
     case 'select': throw new Error('select binds per option, not per element');
   }
 }

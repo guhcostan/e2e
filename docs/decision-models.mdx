@@ -72,8 +72,8 @@ Tests stay plain natural language, with no params needed:
 import { test, expect } from 'e2e';
 
 test('adds a todo', async ({ app, screen, agent }) => {
-  await app.open();
-  await agent.act('Open /todos, add a todo named Buy coffee, and verify it is listed.');
+  await app.open('/todos');
+  await agent.act('Add a todo named Buy coffee, and verify it is listed.');
   await expect(screen.getByTestId('todo')).toContainText('Buy coffee');
   await agent.assert('The todo list contains Buy coffee.');
 });
@@ -94,11 +94,22 @@ executor's `model`, so `waitFor` and `extract` use it too. It can come
 from the agents entry's `model` instead. Without either, `type` is never
 offered.
 
+## Finishing a step
+
+When the decision model answers `done` or `failed`, the executor checks
+the claim on a fresh screen with one verdict question that sees the actions
+taken in the step and no model reasoning. A confirmed `done` passes the
+step and a confirmed `failed` fails it with `ACTION_FAILED`. An
+unconfirmed claim goes back to the decision model as history; the second one
+ends the step, as `ACTION_FAILED` when the screen contradicts the goal and
+as `blocked` (`AUTOMATION_UNSUPPORTED`) otherwise.
+
 ## Gates
 
 Both gates are off by default: the executor follows the most probable
-choice. Set `minProbability` or `minConfidence` to block weaker actions
-and fail weaker assertions as inconclusive instead:
+choice. Set `minProbability` or `minConfidence` to block weaker actions,
+reject weaker completion checks, and fail weaker assertions as
+inconclusive instead:
 
 ```ts title="Executor setup"
 const executor = decisionExecutor({ model, minProbability: 0.9, minConfidence: 0.8 });
