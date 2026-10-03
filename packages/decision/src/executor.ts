@@ -73,7 +73,11 @@ async function run(
     `p=${decision.probability.toFixed(3)}, confidence ${decision.confidence.toFixed(3)}`;
   const budgetMessage = (): string =>
     `The step did not conclude within its ${ctx.budgets.maxModelCalls} decision calls.`;
-  /** The action space of a complete observation; undefined when the tree is missing or empty. */
+  /**
+   * The action space of a complete observation; undefined when the tree is
+   * missing or empty. Verdict views pass `typing: true` so a field the step
+   * filled keeps its row and value even when the step itself cannot type.
+   */
   const spaceOf = (observation: ExecutorObservation, typing: boolean): ActionSpace | undefined => {
     const tree = observation.tree;
     if (observation.treeUnavailable || tree === undefined || emptyTree(observation)) return undefined;
@@ -102,7 +106,7 @@ async function run(
   };
   if (ctx.step.kind === 'assert') {
     const observation = await ctx.observe({ tree: true });
-    const space = spaceOf(observation, false);
+    const space = spaceOf(observation, true);
     if (space === undefined) return finish(inconclusive('A complete semantic observation is required.'));
     const request = verdictRequest(ctx.step.instruction, observation.path ?? '', space.pageText, elementRecords(space), []);
     const answers = await ask(request);
@@ -248,7 +252,7 @@ async function run(
    */
   async function terminalCheck(claim: 'done' | 'failed'): Promise<StepVerdict | undefined> {
     const observation = await ctx.observe({ tree: true });
-    const space = spaceOf(observation, false);
+    const space = spaceOf(observation, true);
     if (space === undefined) return rejectClaim(claim, 'incomplete observation');
     const actions = history.map((entry) => entry.action);
     const request = verdictRequest(ctx.step.instruction, observation.path ?? '', space.pageText, elementRecords(space), actions);

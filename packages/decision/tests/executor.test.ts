@@ -497,7 +497,25 @@ describe('context', () => {
     await decisionExecutor({ model }).runStep(fixture.ctx);
     const state = requests[12]?.state as { recentActions?: unknown[] } | undefined;
     expect(fixture.actions.tap).toHaveBeenCalledTimes(12);
-    expect(state?.recentActions).toHaveLength(10);
+    const actions = (state?.recentActions as { action: string }[] | undefined)?.map((entry) => entry.action);
+    expect(actions).toEqual(Array.from({ length: 10 }, (_, index) => `tap Page ${index + 3} [a]`));
+  });
+  it('shows filled fields to the completion check even when the step cannot type', async () => {
+    const tree: ExecutorNode = { id: 'root', children: [
+      { id: 'name', role: 'textbox', name: 'Name', value: 'Ada' },
+      { id: 'save', role: 'button', name: 'Save' },
+    ] };
+    const { model, requests } = scriptedEvaluation((id, keys) => ({
+      choice: id === 'operation' ? 'done' : id === 'verdict' ? 'holds' : (keys[0] ?? ''),
+    }));
+    // No text model and no press verb: in the act loop the field offers no operation.
+    const fixture = context({ tree, verbs: ['tap', 'type'] });
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: 'passed' });
+    const decision = requests[0]?.state as { elements: { label: string }[] };
+    expect(decision.elements.map((element) => element.label)).toEqual(['Save']);
+    const check = requests[1]?.state as { elements: { label: string; value?: string }[] };
+    expect(check.elements).toContainEqual(expect.objectContaining({ label: 'Name', value: 'Ada' }));
   });
   it('shows checked state in check target criteria', async () => {
     const tree: ExecutorNode = { id: 'root', children: [
