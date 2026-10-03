@@ -4,11 +4,12 @@ import { AgentError, isAgentError } from 'e2e/agent';
 import { actionSpace, type ActionSpace, type Control, type Operation, type Target } from './elements.ts';
 import { evaluate, type Decision } from './evaluate.ts';
 import {
+  assertionRequest,
+  completionRequest,
   decisionRequest,
   elementRecords,
   nonSecretParams,
   targetKeyIndex,
-  verdictRequest,
   type DecisionRequest,
   type HistoryEntry,
 } from './questions.ts';
@@ -108,7 +109,7 @@ async function run(
     const observation = await ctx.observe({ tree: true });
     const space = spaceOf(observation, true);
     if (space === undefined) return finish(inconclusive('A complete semantic observation is required.'));
-    const request = verdictRequest(ctx.step.instruction, observation.path ?? '', space.pageText, elementRecords(space), []);
+    const request = assertionRequest(ctx.step.instruction, observation.path ?? '', space.pageText, elementRecords(space));
     const answers = await ask(request);
     if (answers === undefined) return finish(blocked(budgetMessage()));
     const verdict = need(answers.verdict, 'verdict');
@@ -254,8 +255,14 @@ async function run(
     const observation = await ctx.observe({ tree: true });
     const space = spaceOf(observation, true);
     if (space === undefined) return rejectClaim(claim, 'incomplete observation');
-    const actions = history.map((entry) => entry.action);
-    const request = verdictRequest(ctx.step.instruction, observation.path ?? '', space.pageText, elementRecords(space), actions);
+    const request = completionRequest({
+      goal: ctx.step.instruction,
+      params: nonSecretParams(ctx.step.params),
+      path: observation.path ?? '',
+      pageText: space.pageText,
+      elements: elementRecords(space),
+      history,
+    });
     const answers = await ask(request);
     if (answers === undefined) return blocked(budgetMessage());
     const verdict = need(answers.verdict, 'verdict');

@@ -22,6 +22,11 @@ describe('fieldText', () => {
     expect(fixture.usage).toHaveLength(1);
     expect(fixture.usage[0]).toMatchObject({ provider: 'scripted-text' });
   });
+  it('names the answer key for providers without JSON-schema output', async () => {
+    const text = scriptedText(['Ada']);
+    await fieldText(context({ model: text.model }).ctx, text.model, input());
+    expect(JSON.stringify(text.prompts[0])).toContain('exactly one key, \\"text\\"');
+  });
   it('maps null and empty to no value', async () => {
     for (const queued of [null, '']) {
       const text = scriptedText([queued]);

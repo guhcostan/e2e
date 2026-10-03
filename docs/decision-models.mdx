@@ -97,8 +97,10 @@ offered.
 ## Finishing a step
 
 When the decision model answers `done` or `failed`, the executor checks
-the claim on a fresh screen with one verdict question that sees the actions
-taken in the step and no model reasoning. A confirmed `done` passes the
+the claim on a fresh screen with one question: is the step's task complete?
+It sees the step's non-secret params, the actions taken with the values
+typed, and the page, including the text of named status regions, but no
+model reasoning. A confirmed `done` passes the
 step and a confirmed `failed` fails it with `ACTION_FAILED`. An
 unconfirmed claim goes back to the decision model as history; the second one
 ends the step, as `ACTION_FAILED` when the screen contradicts the goal and

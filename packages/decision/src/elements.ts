@@ -99,9 +99,9 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
       if (operations.length > 0) {
         rows.push({ node, operations, inViewport: intersects(node, observation.viewport) });
       } else {
-        const text = node.name ?? node.attributes?.['placeholder'] ?? node.text ?? '';
+        const line = pageLine(node);
         // A checked radio leaves the table, so its state rides on the page text.
-        if (text.trim() !== '') pageText.push(checkedRadio ? `${text} (checked)` : text);
+        if (line !== '') pageText.push(checkedRadio ? `${line} (checked)` : line);
       }
     }
     for (const child of node.children ?? []) visit(child, underNativeSelect || node.role === 'combobox');
@@ -204,6 +204,19 @@ function bind(node: ExecutorNode, operation: Operation, label: string, ctx: Step
 /** Label the model reads: name, placeholder, or text. */
 function nodeLabel(node: ExecutorNode): string {
   return node.name ?? node.attributes?.['placeholder'] ?? node.text ?? '';
+}
+
+/**
+ * One page-text line for a non-interactive node. A named node keeps its text
+ * when the two differ, as the runner's `formatNode` does: a status named
+ * "Greeting" whose text says "Welcome back, admin!" is the evidence a
+ * completion check needs, and the name alone hides it.
+ */
+function pageLine(node: ExecutorNode): string {
+  const name = (node.name ?? '').trim();
+  const text = (node.text ?? '').replace(/\s+/g, ' ').trim();
+  if (name === '') return text === '' ? (node.attributes?.['placeholder'] ?? '').trim() : text;
+  return text === '' || text === name ? name : `${name} text=${JSON.stringify(text)}`;
 }
 
 /** Whether the node's box meets the viewport. Nodes without a box stay in tree order. */

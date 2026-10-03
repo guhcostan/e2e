@@ -95,6 +95,14 @@ describe('element table', () => {
     expect(space.elements[0]).toMatchObject({ label: 'Search todos' });
     expect(space.elements[0]?.operations).toContain('type');
   });
+  it('keeps a named node\'s text in the page text when it differs from the name', () => {
+    const space = spaceFor([
+      { id: 'g', role: 'status', name: 'Greeting', text: 'Welcome back,\n  admin!' },
+      { id: 'h', role: 'heading', name: 'Todos', text: 'Todos' },
+      { id: 'p', role: 'paragraph', text: '1 remaining' },
+    ]);
+    expect(space.pageText).toBe('Greeting text="Welcome back, admin!"\nTodos\n1 remaining');
+  });
   it('never offers verbs the target lacks', () => {
     const space = spaceFor(
       [{ id: 'a', role: 'button', name: 'Add' }, { id: 'b', role: 'textbox', name: 'Name' }],

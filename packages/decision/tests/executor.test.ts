@@ -500,6 +500,42 @@ describe('context', () => {
     const actions = (state?.recentActions as { action: string }[] | undefined)?.map((entry) => entry.action);
     expect(actions).toEqual(Array.from({ length: 10 }, (_, index) => `tap Page ${index + 3} [a]`));
   });
+  it('gives the completion check the inputs, typed values, and actions, never claims or secrets', async () => {
+    const { model, requests } = scriptedEvaluation((id, keys, call) => {
+      if (id === 'operation') return { choice: call === 0 ? 'type' : 'done' };
+      if (id === 'verdict') return { choice: call === 2 ? 'inconclusive' : 'holds' };
+      return { choice: keys[0] ?? '' };
+    });
+    const text = scriptedText(['Ada']);
+    const fixture = context({
+      tree: FIELD,
+      model: text.model,
+      params: { nickname: 'Ada', password: { kind: 'secret', name: 'admin.password', purpose: 'password' } },
+    });
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: 'passed' });
+    const checks = requests.filter((request) => 'verdict' in request.questions);
+    expect(checks).toHaveLength(2);
+    expect(checks[1]?.state).toMatchObject({
+      params: { nickname: 'Ada' },
+      actions: ['type into Name [name] = "Ada"'],
+    });
+    expect(JSON.stringify(checks[1]?.state)).not.toContain('admin.password');
+  });
+  it('shows a named status\'s text to the completion check', async () => {
+    const tree: ExecutorNode = { id: 'root', children: [
+      { id: 'greeting', role: 'status', name: 'Greeting', text: 'Welcome back, admin!' },
+      { id: 'out', role: 'button', name: 'Sign out' },
+    ] };
+    const { model, requests } = scriptedEvaluation((id, keys) => ({
+      choice: id === 'operation' ? 'done' : id === 'verdict' ? 'holds' : (keys[0] ?? ''),
+    }));
+    const fixture = context({ tree });
+    await decisionExecutor({ model }).runStep(fixture.ctx);
+    const check = requests.find((request) => 'verdict' in request.questions);
+    const state = check?.state as { page: { text: string } } | undefined;
+    expect(state?.page.text).toContain('Greeting text="Welcome back, admin!"');
+  });
   it('shows filled fields to the completion check even when the step cannot type', async () => {
     const tree: ExecutorNode = { id: 'root', children: [
       { id: 'name', role: 'textbox', name: 'Name', value: 'Ada' },
