@@ -248,12 +248,6 @@ importers:
       '@ai-sdk/devtools':
         specifier: 1.0.22
         version: 1.0.22
-      '@ai-sdk/openai-compatible':
-        specifier: 3.0.62
-        version: 3.0.62(zod@4.6.1)
-      '@e2e-dev/decision':
-        specifier: workspace:*
-        version: link:../../packages/decision
       '@types/node':
         specifier: 26.6.2
         version: 26.6.2
@@ -324,6 +318,9 @@ importers:
       '@e2e-dev/web':
         specifier: workspace:*
         version: link:../packages/web
+      '@openrouter/ai-sdk-provider':
+        specifier: 3.1.0
+        version: 3.1.0(ai@7.0.107(zod@4.6.1))(zod@4.6.1)
       '@types/node':
         specifier: 26.6.2
         version: 26.6.2
@@ -345,6 +342,9 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+      zod:
+        specifier: 4.6.1
+        version: 4.6.1
 
   packages/decision:
     dependencies:
@@ -355,9 +355,6 @@ importers:
         specifier: 4.6.1
         version: 4.6.1
     devDependencies:
-      '@ai-sdk/typesafe-ai':
-        specifier: 3.0.12
-        version: 3.0.12(zod@4.6.1)
       '@e2e-dev/web':
         specifier: workspace:*
         version: link:../web
@@ -580,12 +577,6 @@ packages:
 
   '@ai-sdk/openai-compatible@3.0.53':
     resolution: {integrity: sha512-uOeghHYcF+CHP/dOCAtdfKesuKLKqDFtkq79bJFNSx4YOqpiP734TdJAZDA8KIWH7mdGNQ0a4N9238HG4FN2Rg==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      zod: ^3.25.76 || ^4.1.8
-
-  '@ai-sdk/openai-compatible@3.0.62':
-    resolution: {integrity: sha512-IAz1xv8zot4KLGa8kN7UfAA6H5+ARzAgAKLsoKxHPBzZuOc2E3ohaELg0x/JR9HVTbMbiftb0dPyCb8cT2KBRg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -7378,12 +7369,6 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.17
       '@ai-sdk/provider-utils': 5.0.45(zod@4.6.1)
-      zod: 4.6.1
-
-  '@ai-sdk/openai-compatible@3.0.62(zod@4.6.1)':
-    dependencies:
-      '@ai-sdk/provider': 4.0.21
-      '@ai-sdk/provider-utils': 5.0.53(zod@4.6.1)
       zod: 4.6.1
 
   '@ai-sdk/openai@4.0.71(zod@4.6.1)':

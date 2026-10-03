@@ -1,21 +1,15 @@
 ---
 title: Decision models
-description: Run bounded actions and assertions with a decision model instead of an LLM.
+description: Run bounded actions with a decision model and a small text model instead of a full LLM agent.
 ---
 
 `@e2e-dev/decision` runs `agent.act` and `agent.assert` through a decision
-model instead of an LLM. Decision models pick between choices bound by code;
-they do not generate free text. Cloudflare's [Clef or Clef-flash](https://developers.cloudflare.com/workers-ai/models/clef/)
-and TypeSafe's [Jev](https://docs.typesafe.ai/api) are two suggestions, and any
-System One-compatible model works, hosted as an API or self-hosted locally. The same tests
-and executor work with every provider.
-
-These models choose between values defined by code. They do not generate
-arbitrary text or implement the AI SDK language-model contract. Configure
-`decisionExecutor` under `executor`; `model` and `judge` on the agents entry
-still take AI SDK language models. `decisionExecutor` takes either a built-in
-transport or an [AI SDK evaluation model](#ai-sdk-evaluation-models); only the
-second needs the `ai` package.
+model instead of an LLM. A decision model answers one question per action —
+which operation, then which element — from choices the executor builds out
+of the latest semantic tree. It never generates free text: when the choice
+is `type`, a small language model writes the field value. Both models are
+plain AI SDK models, so any evaluation provider (Jev) and any language-model
+provider works; the runner still authorizes every dispatched action.
 
 ## Install and configure
 
@@ -33,397 +27,97 @@ bun add -d @e2e-dev/decision
 ```
 </CodeGroup>
 
-Set `DECISION_PROVIDER` to `clef`, `clef-flash`, or `jev`. Clef needs
-`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`; Jev needs
-`TYPESAFE_API_KEY`. This example reads these environment variables itself.
-e2e does not load `.env` files.
+The decision model answers `choice` questions with probability
+distributions; the text model writes field values. Each installs as its
+own package:
 
-```ts title="e2e.config.ts"
-import type { E2EConfig } from 'e2e';
-import { web } from '@e2e-dev/web';
-import { clef, jev, decisionExecutor } from '@e2e-dev/decision';
-
-const provider = process.env.DECISION_PROVIDER ?? 'clef-flash';
-if (!['clef', 'clef-flash', 'jev'].includes(provider)) {
-  throw new Error('DECISION_PROVIDER must be clef, clef-flash, or jev.');
-}
-const model = provider === 'jev'
-  ? jev({ apiKey: process.env.TYPESAFE_API_KEY ?? '' })
-  : clef({
-      accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
-      apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
-      model: provider === 'clef' ? 'clef' : 'clef-flash',
-    });
-
-export default {
-  targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
-  agents: { default: { executor: decisionExecutor({ model }) } },
-} satisfies E2EConfig;
+<CodeGroup>
+```bash npm
+npm install -D @ai-sdk/typesafe-ai @openrouter/ai-sdk-provider
 ```
 
-`clef()` defaults to Clef-flash, the smaller Cloudflare model; pass `model: 'clef'` for the full model.
-`jev({ model: 'jev-1.13.0', ... })` pins a Jev version instead of the default
-`jev-latest`. Check the [TypeSafe model list](https://docs.typesafe.ai/models)
-for available versions.
-
-## Navigate and fill using params
-
-Supply text and destinations in `params`. The executor offers an atomic
-choice for each supported operation on the latest semantic tree. Each
-choice binds its verb, node id, and arguments before the model sees it.
-The model returns the choice id; code dispatches its bound operation through
-`ctx.actions`, where the runner authorizes and records it.
-
-```ts title="tests/todos.e2e.ts"
-import { test, expect } from 'e2e';
-
-test('adds a todo', async ({ app, screen, agent }) => {
-  await app.open();
-  await agent.act('Open {destination}, add a todo named {title}, and verify it is listed.', {
-    params: { destination: '/todos', title: 'Buy coffee' },
-  });
-  await expect(screen.getByTestId('todo')).toContainText('Buy coffee');
-  await agent.assert('The todo list contains Buy coffee.');
-});
+```bash pnpm
+pnpm add -D @ai-sdk/typesafe-ai @openrouter/ai-sdk-provider
 ```
 
-The model can tap links without a destination param because their nodes
-are on the current screen. A typed URL or path must come from a string param.
-Values to fill and option labels to select also come from string params.
-An instruction such as "write a greeting" needs a supplied value, for example
-`params: { greeting: 'Hello' }`.
-
-Secret params stay handles. Pass `credentials.user('admin').password` in
-`params` and name that param in the instruction, as with the built-in agent.
-The decision model chooses a declared secret handle and the current field;
-`ctx.actions.typeSecret` checks and fills it. A password never becomes a
-plain-text fill choice. The runner redacts future observations.
-
-| Operation | Arguments offered to the model |
-| --- | --- |
-| Tap | Enabled buttons, links, menu items, tabs, checkboxes, radios, switches, options, and tree items. |
-| Type | An editable node and a string param, excluding password fields. |
-| Type secret | An editable node and a secret declared in this step's params. |
-| Press | An editable node and `Enter`, `Tab`, or `Escape`. |
-| Select | A combobox and a string param containing the option label. |
-| Check | A checkbox, radio, or switch and a boolean state. |
-| Navigate | A URL or path supplied in a string param. |
-| Back | One history step. |
-| Scroll | One viewport screen up or down. |
-| Dismiss keyboard | No arguments, on engines that declare this verb. |
-
-Only verbs the engine declares are offered. Every iteration observes the
-screen again. On structured transports (Clef, Jev) each iteration asks two
-narrower questions instead of one flat choice: first the operation (`type`,
-`tap`, `complete`, `unsupported`, and the rest), then the target within the
-chosen operation. Flat transports keep the single choice with string
-criteria. An operation with a single target dispatches it without a second
-question, since the API needs at least two options and the answer is
-already decided. Each acting decision also receives the actions this step
-has already taken, so the model can tell which params it used.
-Choosing `complete` triggers a separate judgment on a fresh
-screen, without action feedback or the prior-step ledger; a model's claim
-that it completed the task cannot pass the step on its own. When that verification is inconclusive,
-the act step blocks instead of failing an assertion.
-
-## Probability, confidence, and inconclusive results
-
-Both gates are off by default: the executor follows the most probable
-choice, the way a decision model is meant to be used. Set either one to
-make the executor block an action, or fail an assertion as inconclusive,
-when a decision is weaker than you accept:
-
-```ts title="Executor setup"
-const executor = decisionExecutor({ model, minProbability: 0.95, minConfidence: 0.85 });
+```bash bun
+bun add -d @ai-sdk/typesafe-ai @openrouter/ai-sdk-provider
 ```
-
-Probability and confidence are different provider fields. A threshold is a
-policy choice; measure accuracy on your own tests before changing it.
-Responses with unknown choices, missing probabilities, out-of-range numbers,
-or a distribution that does not sum to one fail with `MODEL_OUTPUT_INVALID`.
-
-An assertion that contradicts the screen fails with `ASSERTION_FAILED`.
-An assertion under a configured gate, incomplete semantic capture, or an explicit
-`inconclusive` choice fails with `ASSERTION_INCONCLUSIVE`. An action under a
-configured gate returns a blocked `AUTOMATION_UNSUPPORTED` before it is
-dispatched; actions from earlier decisions in the same step have already run.
-
-The executor sends at most `maxModelCalls` requests and keeps each request
-under the step's abort signal. Calls, tokens, latency, and provider/model
-provenance enter the report through the executor accounting API. HTTP failures
-use `MODEL_PROVIDER_FAILED`; response bodies and credentials never enter
-error messages. There are no transport retries in this package.
-
-## Vision
-
-The executor is text-only by default: it sends the redacted semantic tree as
-text and never requests pixels. Pass `vision: true` to also attach the masked
-viewport screenshot to each decision request:
-
-```ts title="Executor with vision"
-const executor = decisionExecutor({ model, vision: true });
-```
-
-Screenshots travel as the System One `images` array, alongside the state, as
-embedded PNG data URLs. Both sides opt in: the executor flag above, and a
-transport that declares vision. `clef()` declares it; `jev()` is text-only
-unless a future endpoint accepts images, in which case `jev({ vision: true })`
-opts in the same way. A compatible endpoint receives images only when built
-with `systemOne({ vision: true })`. To keep a transport text-only no matter
-what the executor asks, pass `vision: false`: `clef({ vision: false })` never
-sends screenshots. AI SDK evaluation models stay text-only too: the evaluation
-call has no image input, so the executor never requests pixels for them.
-
-Pixels degrade instead of failing the step. When the engine withholds them, or
-after a secret fill taints the viewport, the step decides from semantic text
-alone. Calls that actually carry a screenshot cost more and run longer than
-text-only calls; withheld or tainted viewports send none. Point actions
-stay unimplemented: pixels inform which node choice to pick, they add no new
-action vocabulary.
-
-## Compatible endpoints
-
-`systemOne` accepts the full evaluation URL. It sends one `choice` question
-named `decision` and expects the [System One response](https://docs.typesafe.ai/api#response-body).
-Use it for a self-hosted Clef or another compatible service:
-
-```ts title="Local decision model"
-import { systemOne, decisionExecutor } from '@e2e-dev/decision';
-
-const executor = decisionExecutor({
-  model: systemOne({
-    endpoint: 'http://127.0.0.1:8000/v1/systemone',
-    apiKey: process.env.DECISION_API_KEY ?? '',
-    model: 'clef',
-    provider: 'local',
-  }),
-});
-```
-
-Use `envelope: 'cloudflare'` when a service wraps its answer in
-`{ success: true, result: ... }`. HTTP redirects are refused so credentials
-cannot follow a redirect to another endpoint.
-
-Some compatible endpoints validate strictly and reject the structured `instructions`
-and `criteria` objects the native APIs accept. `systemOne` therefore sends
-instructions as one labeled string and criteria as a string-valued record
-unless you pass `structured: true`. `clef()` and `jev()` send objects and ask
-two narrower questions per action: the operation first, then the target
-within it. Pass `probabilityDecimals` when an endpoint rounds its
-probabilities; `jev()` declares the two places TypeSafe rounds to, so a long
-distribution that sums to 0.99 still validates.
-
-## AI SDK evaluation models
-
-`decisionExecutor` also accepts any AI SDK
-[evaluation model](https://ai-sdk.dev/docs/ai-sdk-core/evaluation) that answers
-choice questions, such as TypeSafe's official provider. Each decision is one
-`experimental_evaluate` call with one choice question and no retries, so the
-runner's call budget counts provider requests exactly. Install `ai` and the
-provider package next to `@e2e-dev/decision`.
+</CodeGroup>
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
 import { decisionExecutor } from '@e2e-dev/decision';
 import { typeSafeAi } from '@ai-sdk/typesafe-ai';
+import { openrouter } from '@openrouter/ai-sdk-provider';
 
-// Reads TYPESAFE_AI_API_KEY. Any AI SDK evaluation model with choice
-// distributions works the same way.
 export default {
   targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
   agents: {
-    default: { executor: decisionExecutor({ model: typeSafeAi.evaluationModel('jev-latest') }) },
+    default: {
+      executor: decisionExecutor({
+        model: typeSafeAi.evaluationModel('jev-latest'),
+        textModel: openrouter('inception/mercury-2.5'),
+      }),
+    },
   },
 } satisfies E2EConfig;
 ```
 
-Configured gates apply the same way. The executor reads the selected
-probability from the answer's distribution, so a model must return one: TypeSafe does, while the
-language-model adapters for OpenAI, Anthropic, and Google answer without a
-distribution and the executor rejects those answers with
-`MODEL_OUTPUT_INVALID`. Confidence is provider metadata keyed by question id
-(TypeSafe reports it under `providerMetadata.typesafe.confidence`). A model
-that reports none counts as confidence 0, so any `minConfidence` above 0
-blocks it.
+Tests stay plain natural language, with no params needed:
 
-It works the other way too. `evaluationModel()` exposes `clef()`, `jev()`,
-and `systemOne()` endpoints as AI SDK evaluation models, for Cloudflare's Clef,
-which has no AI SDK provider, or for a self-hosted endpoint. Pass the result to
-`decisionExecutor` or call `experimental_evaluate` in application code:
+```ts title="tests/todos.e2e.ts"
+import { test, expect } from 'e2e';
 
-```ts title="evaluate.ts"
-import { experimental_evaluate } from 'ai';
-import { clef, evaluationModel } from '@e2e-dev/decision';
-
-const model = evaluationModel(clef({
-  accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
-  apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
-}));
-
-const result = await experimental_evaluate({
-  model,
-  state: { message: 'I was charged twice.' },
-  questions: {
-    department: {
-      type: 'choice',
-      instructions: 'Which team should handle this?',
-      criteria: { billing: 'Payments and refunds', support: 'Other requests' },
-    },
-  },
+test('adds a todo', async ({ app, screen, agent }) => {
+  await app.open();
+  await agent.act('Open /todos, add a todo named Buy coffee, and verify it is listed.');
+  await expect(screen.getByTestId('todo')).toContainText('Buy coffee');
+  await agent.assert('The todo list contains Buy coffee.');
 });
-
-console.log(result.answers.department.choice, result.answers.department.probabilities);
 ```
 
-These adapters answer choice questions only; score and boolean questions are
-rejected before any request. Confidence lands in `providerMetadata` under the
-transport's provider name, the convention TypeSafe's provider uses. Run
-through `experimental_evaluate` with full Clef, the benchmark flow below
-completed 3 of 3 runs with the same 12 calls and 11.7k input tokens per run as
-the direct transport.
+## How text gets typed
 
-## Benchmark: LLM agent vs decision model
+The decision model only ever names an element index. When it picks `type`,
+the text model writes the value from the goal, the field's label, and the
+page text, and the executor types exactly that string. Model output never
+becomes a selector, a URL, or a key. When the goal supplies no value,
+nothing is typed and the decision model picks another action. Password
+fields never reach the text model; secrets stay declared handles that only
+`typeSecret` fills.
 
-The same todo flow runs under each config against the same app and engine:
-`parametrized todo flow` in `apps/testbed/tests-bench/todo-flow.e2e.ts`
-(add "Buy milk" and "Walk the dog", mark "Buy milk" done, values as
-params, all assertions deterministic). One side uses the default agent
-executor with an LLM, the other uses `decisionExecutor`:
+The text model is also the agent's judgment tier: it is exposed as the
+executor's `model`, so `waitFor` and `extract` use it too. It can come
+from the agents entry's `model` instead. Without either, `type` is never
+offered.
 
-- `apps/testbed/e2e.bench-luna.config.ts`: the default executor with luna
-  served through OpenCodeX (`BENCH_LUNA_MODEL`, default `gpt-6-luna`).
-- `apps/testbed/e2e.bench-clef.config.ts`: `decisionExecutor` with `clef()`
-  from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN`; Clef-flash by
-  default, `BENCH_CLEF_MODEL=clef` for the full model, `BENCH_VISION=1` to
-  attach the screenshot, and optional gates from `BENCH_MIN_PROBABILITY` and
-  `BENCH_MIN_CONFIDENCE`.
-- `apps/testbed/e2e.bench-jev.config.ts`: `jev()` with `JEV_API_KEY`, or a
-  compatible gateway through `BENCH_JEV_ENDPOINT` and `BENCH_JEV_MODEL`.
-- `apps/testbed/e2e.bench-laya.config.ts`: Laya through `systemOne()` with
-  `LAYA_API_KEY`.
+## Gates
 
-```bash
-node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-luna.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
-CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=... node node_modules/e2e/dist/cli/bin.js run --config e2e.bench-clef.config.ts tests-bench/todo-flow.e2e.ts --workers 1 --no-cache --repeat-each 5
+Both gates are off by default: the executor follows the most probable
+choice. Set `minProbability` or `minConfidence` to block weaker actions
+and fail weaker assertions as inconclusive instead:
+
+```ts title="Executor setup"
+const executor = decisionExecutor({ model, minProbability: 0.9, minConfidence: 0.8 });
 ```
 
-![Todo flow end state](/images/bench-todo-flow.png)
+Probability and confidence are different provider fields: probability is the
+selected option's share of the answer distribution, confidence is the
+provider's separate statistic. A threshold is a policy choice; measure
+accuracy on your own tests before changing it.
 
-### Results
+## Limits
 
-Five `--no-cache` runs per row on the same machine, so every repetition
-spends real model calls. Small N: treat this as a smoke comparison, not a
-measurement.
-
-| Side | Model | Input | Completed | Wall (mean, range) | Calls / run | In / out tokens / run | Cost / run | Total (5 runs) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Decision model | `jev-1.13` via a System One gateway | text, flat | 5/5 | 4.4s (3.7–5.2) | 7 | 14.7k in / 0 out | ~$0.0006 | ~$0.003 |
-| Decision model | `clef-flash` via Cloudflare | text | 5/5 | 9.3s (8.5–10.8) | 12 | 12.3k in / 0 out | ~$0.0011 | ~$0.0055 |
-| Decision model | `clef` via Cloudflare | text | 5/5 | 11.5s (10.1–13.9) | 12 | 12.3k in / 0 out | ~$0.0030 | ~$0.015 |
-| Decision model | `clef` via Cloudflare | text + screenshot | 5/5 | 12.9s (11.5–13.9) | 12 | 16.4k in / 0 out | ~$0.0039 | ~$0.020 |
-| LLM agent | `gpt-6-luna` via OpenCodeX Zen | text | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
-| Decision model | `clef-flash` via Cloudflare | text + screenshot | 0/5 | 8.3s (6.5–10.3) | 10 | 13.5k in / 0 out | ~$0.0012 | ~$0.006 |
-| Decision model | `laya-rl-agent` via Laya | text | 0/4, 1 refused for credits | ~1s | 1 | 684 in / 0 out | ~$0.00002 | - |
-| Decision model | `laya-rl-agent` local, english checkpoint (M1 MPS) | text | 0/5 | ~28s | 25 (budget) | ~9.3k in / 0 out | $0 (own hardware) | $0 |
-| Decision model | `laya-typed-decisions` local (M1 MPS) | text | 0/5 | 29.6s (29.1–30.3) | 25 (budget) | ~9.6k in / 0 out | $0 (own hardware) | $0 |
-
-Gates are off (the default) on every decision row. Five configurations
-finish every run. The decision models repeat one trajectory on every
-repetition (type, Add, type, Add, check, then the completion check), so only
-latency varies; luna changes its path between runs (4–6 calls) and still
-lands each time. Jev is the fastest and the cheapest of the finishers: it
-asks one flat question per action, so it needs 7 calls where the structured
-Clef path needs 12. Clef-flash follows at about 9s, full Clef at about 11.5s,
-and luna at about 15s.
-
-Costs are estimates from the measured input tokens and each provider's
-published input price: TypeSafe Jev $0.042/M, Cloudflare clef $0.240/M and
-clef-flash $0.090/M, Laya $0.0357/M; none of them bills output. Luna is
-priced on OpenCodeX Zen (standard tier: $0.10/M input, $0.01/M cached input,
-$0.50/M output); a traced run measured 26.9k input tokens at 73% cached
-prefix plus 169 output tokens. A screenshot adds roughly 300 input tokens
-per call on this viewport. The whole comparison costs about $0.05. Small N,
-and prices change: re-check the pricing pages before budgeting.
-
-Jev ran through a System One-compatible gateway that accepts only flat
-strings and returns HTTP 422 for structured values, so
-`apps/testbed/e2e.bench-jev.config.ts` uses `systemOne()` with plain strings
-when `BENCH_JEV_ENDPOINT` is set and `jev()` against TypeSafe's API
-otherwise.
-
-Vision helps full Clef read the screen and costs it 1.4s and a third more
-tokens per run on this flow, where the text tree already carries everything.
-It hurts Clef-flash here: after typing the second name, the screenshot pulls
-its target choice to the visible "Buy milk" checkbox (0.67) over the Add
-button (0.10), and the independent completion check fails the run. On a
-question the text cannot answer (the screen state withheld, the todos only
-in the screenshot), both Clef models pick the right answer at 0.99 with the
-image and the wrong one without it.
-
-Clef-flash finished 0 of 5 runs before four executor changes, each found
-on this flow. With the 0.9 gates that used to be the default it blocked on
-its first decision (probability 0.909, confidence 0.802), so the gates are
-now opt-in. Without gates it reached a target question with one option,
-which the API rejects with HTTP 422, so a lone target now dispatches
-directly. It then oscillated between typing the two names into the same
-field until the call budget ran out, because each decision saw only the
-last action: decisions now receive the step's action history, and the
-repeat guard counts across the whole step. Last, it moved on after typing
-the second name without submitting it; the operation and target questions
-now state that typed text is not saved until it is submitted. The
-independent completion check caught that last mistake and failed the run
-instead of passing it.
-
-Laya serves the same System One API, so it runs through `systemOne()` with
-`structured: true` (`apps/testbed/e2e.bench-laya.config.ts`, `LAYA_API_KEY`).
-Against the cloud API, four runs chose `unsupported` on the first operation
-question with probability 0.29 and confidence 0.10, over a flat distribution
-(navigate 0.19, type 0.15, tap 0.14), so the step blocked before any action.
-Its response metadata shows the router classified the English prompt as
-Spanish and answered with its multilingual checkpoint. The workspace's 5,000
-free credits ran out before a pinned English checkpoint could run the full
-flow there.
-
-Both checkpoints also ran locally on an M1 Mac through `laya-serve` 0.3.24
-(PyTorch 2.14.1, MPS, per-call inference 85–250ms; the wall time is dominated
-by the browser observations, as on every row). The english checkpoint and the
-`typed-decisions` checkpoint each fail 0/5 the same way: they fixate on
-`navigate to "Buy milk"`, choosing it 12 times across 25 model calls until
-the call budget runs out without ever typing. The third-selection guard keys
-on identical screen text, and each navigation returned an observation a few
-bytes off the last (39–41 bytes), so it never fired. Isolated probes show
-the same indecision (english: navigate 0.27 over
-a flat field at confidence 0.03; typed-decisions: tap 0.41 at confidence
-0.04), so this is the model not knowing the answer, not a transport problem.
-Local runs cost no money and no credits. Laya bills one
-credit per input token ($0.0357/M) and does not bill failed requests; a
-cloud five-run row at the 12.3k tokens per run Clef needed is about 62k
-credits, roughly $0.002.
-
-## Current limits
-
-- Text is the default: without `vision: true` the executor uses semantic text
-  only, including with Clef. With vision, Clef also sees the masked
-  screenshot; canvas-only controls and image-based targets are still not
-  implemented.
-- `agent.waitFor` and `agent.extract` still use the runner's built-in
-  judgment tier. Configure an AI SDK `model` or `judge` for them, or choose
-  a separate LLM agent per call.
-- Every action choice includes its arguments. The API allows 255 choices;
-  two are reserved for `complete` and `unsupported`. A screen and params
-  producing more than 253 operations block the step. Split the flow or
-  reduce the params rather than dropping controls silently.
-- The executor opts out of replaying cached traces. Every step calls the selected
-  decision model. Assertions do not reuse the acting model's history.
-- A task that cannot conclude within its model-call budget returns
-  `AUTOMATION_UNSUPPORTED`. The runner owns action-budget and timeout errors.
-- Choosing the same action on the same screen three times anywhere in the
-  step, which also catches an oscillation between two actions, blocks the
-  step as `AUTOMATION_UNSUPPORTED`.
-- Drag, upload, hover, arbitrary key sequences, and point actions are not
-  implemented. Use locators or a separate LLM agent for these operations.
-
-The tests exercise the HTTP formats and the built CLI with scripted provider
-responses and real Chromium. They do not establish live Clef or Jev accuracy,
-latency, or pricing.
+- No vision: screenshots never reach the model; canvas-only controls and
+  image-based targets are not implemented.
+- No `navigate`: in-app navigation is a `tap` on a link. URLs belong in
+  test code (`browser.goto`, `app.open`).
+- No multi-select `listbox` in v1.
+- The choice cap is 255 options per question (TypeSafe's limit). Larger
+  screens list viewport nodes first and count the rest as omitted, so the
+  model can scroll; the step never blocks just for being large.
+- Drag, upload, and hover are not offered in v1.
+- `waitFor` and `extract` use the text model through the runner's
+  built-in judgment tier.
