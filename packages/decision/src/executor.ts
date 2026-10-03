@@ -17,6 +17,8 @@ import { fieldText, type FieldInput } from './text.ts';
 import type { DecisionExecutorOptions } from './types.ts';
 /** Error codes the runtime owns: rethrown untouched, never absorbed as history. */
 const RUNTIME_CODES = new Set(['STEP_BUDGET_EXHAUSTED', 'STEP_TIMEOUT', 'CANCELLED']);
+/** The handle in the runner's secret-fill summary: `fill secret "<json string>"` at the start. */
+const SECRET_FILL = /^fill secret "(?:[^"\\]|\\.)*"/;
 /** Builds a step executor that acts through a decision model and an optional text model. */
 export function decisionExecutor(options: DecisionExecutorOptions): StepExecutor {
   const minProbability = options.minProbability ?? 0;
@@ -303,14 +305,14 @@ function need(answer: Decision | undefined, what: string): Decision {
 /**
  * Seeds history from a replayed prefix, flagging the uncertain action. The
  * runner's summaries name a filled secret's handle (`fill secret "admin.password"
- * into ...`); secret names reach the model only as `secret` question
- * criteria, so the summaries carry `<secret>` instead.
+ * into ...`, cut at 40 characters); secret names reach the model only as
+ * `secret` question criteria, so that handle becomes `<secret>`. Labels and
+ * values elsewhere in a summary stay as they are, even when they match a name.
  */
 function seedHistory(ctx: StepExecutorContext): HistoryEntry[] {
   const prefix = ctx.replayedPrefix;
   if (prefix === undefined) return [];
-  const names = ctx.step.secrets.map((secret) => JSON.stringify(secret.name));
-  const redact = (summary: string): string => names.reduce((text, name) => text.replaceAll(name, '<secret>'), summary);
+  const redact = (summary: string): string => summary.replace(SECRET_FILL, 'fill secret <secret>');
   const seeded: HistoryEntry[] = prefix.replayedActions.map((action) => ({ action: redact(action), replayed: true as const }));
   if (prefix.uncertainAction !== undefined) {
     seeded.push({ action: redact(prefix.uncertainAction), replayed: true, uncertain: true });

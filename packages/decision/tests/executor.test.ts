@@ -490,18 +490,26 @@ describe('context', () => {
     const fixture = context({
       tree: BUTTONS,
       replayedPrefix: {
-        replayedActions: ['fill secret "password" into textbox "Password"'],
-        totalActions: 2,
+        replayedActions: [
+          'tap button "password"',
+          'fill secret "password" into textbox "Password"',
+          'fill secret "a.very.long.secret.handle.name.cut.at.40…" into textbox "Token"',
+        ],
+        totalActions: 4,
         stopReason: 'action-uncertain',
         uncertainAction: 'tap button "Sign in"',
       },
     });
     await decisionExecutor({ model }).runStep(fixture.ctx);
-    const redacted = 'fill secret <secret> into textbox "Password"';
+    const expected = [
+      'tap button "password"',
+      'fill secret <secret> into textbox "Password"',
+      'fill secret <secret> into textbox "Token"',
+    ];
     const decision = requests[0]?.state as { recentActions: { action: string }[] };
-    expect(decision.recentActions[0]?.action).toBe(redacted);
+    expect(decision.recentActions.slice(0, 3).map((entry) => entry.action)).toEqual(expected);
     const check = requests[1]?.state as { actions: string[] };
-    expect(check.actions[0]).toBe(redacted);
+    expect(check.actions.slice(0, 3)).toEqual(expected);
     expect(JSON.stringify(requests.map((request) => request.state))).not.toContain('secret \\"password\\"');
   });
   it('sends only the last 10 actions', async () => {
