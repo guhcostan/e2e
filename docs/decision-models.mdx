@@ -322,6 +322,8 @@ measurement.
 | LLM agent | `gpt-6-luna` via OpenCodeX Zen | text | 5/5 | 14.9s (13.7–16.0) | 4–6 | ~27k in / ~0.2k out, ~73% cached | ~$0.001 | ~$0.005 |
 | Decision model | `clef-flash` via Cloudflare | text + screenshot | 0/5 | 8.3s (6.5–10.3) | 10 | 13.5k in / 0 out | ~$0.0012 | ~$0.006 |
 | Decision model | `laya-rl-agent` via Laya | text | 0/4, 1 refused for credits | ~1s | 1 | 684 in / 0 out | ~$0.00002 | - |
+| Decision model | `laya-rl-agent` local, english checkpoint (M1 MPS) | text | 0/5 | ~28s | 25 (budget) | ~9.3k in / 0 out | $0 (own hardware) | $0 |
+| Decision model | `laya-typed-decisions` local (M1 MPS) | text | 0/5 | 29.6s (29.1–30.3) | 25 (budget) | ~9.6k in / 0 out | $0 (own hardware) | $0 |
 
 Gates are off (the default) on every decision row. Five configurations
 finish every run. The decision models repeat one trajectory on every
@@ -372,19 +374,25 @@ instead of passing it.
 
 Laya serves the same System One API, so it runs through `systemOne()` with
 `structured: true` (`apps/testbed/e2e.bench-laya.config.ts`, `LAYA_API_KEY`).
-On four runs its first operation question chose `unsupported` with
-probability 0.29 and confidence 0.10, over a flat distribution (navigate
-0.19, type 0.15, tap 0.14), so the step blocked before any action. Its
-response metadata shows the router classified the English prompt as Spanish
-and answered with its multilingual checkpoint, which may explain the flat
-distribution. The API accepts `model: 'english'` to pin the English
-checkpoint, and the bench config now sends it; on a shortened version of the
-same first question that checkpoint chose `tap` (0.64) over `type` (0.12),
-still the wrong first operation. The workspace's 5,000 free credits ran out
-before the pinned checkpoint could run the full flow, so this row is
-incomplete. Laya bills one
+Against the cloud API, four runs chose `unsupported` on the first operation
+question with probability 0.29 and confidence 0.10, over a flat distribution
+(navigate 0.19, type 0.15, tap 0.14), so the step blocked before any action.
+Its response metadata shows the router classified the English prompt as
+Spanish and answered with its multilingual checkpoint. The workspace's 5,000
+free credits ran out before a pinned English checkpoint could run the full
+flow there.
+
+Both checkpoints also ran locally on an M1 Mac through `laya-serve` 0.3.24
+(PyTorch 2.14.1, MPS, per-call inference 85–250ms; the wall time is dominated
+by the browser observations, as on every row). The english checkpoint and the
+`typed-decisions` checkpoint each fail 0/5 the same way: they fixate on
+`navigate to "Buy milk"`, repeating it to the 25-call budget without ever
+typing. Isolated probes show the same indecision (english: navigate 0.27 over
+a flat field at confidence 0.03; typed-decisions: tap 0.41 at confidence
+0.04), so this is the model not knowing the answer, not a transport problem.
+Local runs cost no tokens and no credits. Laya bills one
 credit per input token ($0.0357/M) and does not bill failed requests; a
-full five-run row at the 12.3k tokens per run Clef needed is about 62k
+cloud five-run row at the 12.3k tokens per run Clef needed is about 62k
 credits, roughly $0.002.
 
 ## Current limits
