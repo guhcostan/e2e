@@ -277,6 +277,37 @@ describe('guard rails', () => {
     expect(verdict).toMatchObject({ status: 'blocked', errorCode: 'AUTOMATION_UNSUPPORTED' });
     expect(fixture.actions.tap).toHaveBeenCalledTimes(3);
   });
+  it('counts a scroll that brings other nodes into view as progress', async () => {
+    const { model } = scriptedEvaluation((id, keys, call) => ({
+      choice: id === 'operation' ? (call < 4 ? 'scroll_down' : 'done') : id === 'verdict' ? 'holds' : (keys[0] ?? ''),
+    }));
+    const fixture = context({ tree: BUTTONS });
+    let capture = 0;
+    fixture.observe.mockImplementation(async () => {
+      const offset = Math.min(capture, 4) * 200;
+      capture += 1;
+      const tree: ExecutorNode = { id: 'root', children: Array.from({ length: 10 }, (_, index) => ({
+        id: `r${index}`, role: 'button', name: `Row ${index}`,
+        rect: { x: 0, y: index * 200 + 50 - offset, width: 100, height: 100 },
+      })) };
+      return { revision: String(capture), text: '#r0 button', truncated: false, viewport: { width: 800, height: 600 }, tree };
+    });
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: 'passed' });
+    expect(fixture.actions.scroll).toHaveBeenCalledTimes(4);
+  });
+  it('blocks three scrolls that move nothing, as at the bottom of the page', async () => {
+    const { model } = scriptedEvaluation((id, keys) => ({
+      choice: id === 'operation' ? 'scroll_down' : id === 'verdict' ? 'holds' : (keys[0] ?? ''),
+    }));
+    const tree: ExecutorNode = { id: 'root', children: [
+      { id: 'last', role: 'button', name: 'Back to top', rect: { x: 0, y: 400, width: 100, height: 40 } },
+    ] };
+    const fixture = context({ tree });
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: 'blocked', summary: 'Three actions in a row changed nothing on screen.' });
+    expect(fixture.actions.scroll).toHaveBeenCalledTimes(3);
+  });
   it('never trips the guard when pages keep changing', async () => {
     const { model } = scriptedEvaluation((id, keys, call) => ({
       choice: id === 'operation' ? (call < 4 ? 'tap' : 'done') : id === 'verdict' ? 'holds' : (keys[0] ?? ''),

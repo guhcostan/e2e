@@ -157,4 +157,12 @@ describe('fingerprint', () => {
     expect(prints('/form', edited)).not.toBe(base);
     expect(prints('/other', page())).not.toBe(base);
   });
+  it('moves when other nodes come into view, and holds for a small shift', () => {
+    const rows = (offset: number): ExecutorNode => ({ id: 'root', children: Array.from({ length: 6 }, (_, index) => ({
+      id: `r${index}`, role: 'button', name: `Row ${index}`,
+      rect: { x: 0, y: index * 200 + 50 - offset, width: 100, height: 100 },
+    })) });
+    expect(prints('/list', rows(600))).not.toBe(prints('/list', rows(0)));
+    expect(prints('/list', rows(20))).toBe(prints('/list', rows(0)));
+  });
 });

@@ -36,7 +36,7 @@ export interface ActionSpace {
   readonly omitted: number;
   /** Non-interactive page text from the tree, without node ids, clipped to 6000 chars. */
   readonly pageText: string;
-  /** Stable hash of path plus tree content with node ids removed. */
+  /** Stable hash of path, tree content with node ids removed, and which nodes are in view. */
   readonly fingerprint: string;
 }
 
@@ -178,7 +178,7 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
     controls,
     omitted,
     pageText: clip(pageText.join('\n'), 6000),
-    fingerprint: fingerprint(observation.path ?? '', observation.tree),
+    fingerprint: fingerprint(observation.path ?? '', observation.tree, observation.viewport),
   };
 }
 
@@ -230,8 +230,15 @@ function clip(text: string, limit: number): string {
   return text.length > limit ? text.slice(0, limit) : text;
 }
 
-/** Stable hash of path plus tree content with node ids removed. */
-function fingerprint(path: string, tree: ExecutorNode): string {
+/**
+ * Stable hash of the path, the tree content with node ids removed, and
+ * whether each node meets the viewport. Ids change on every capture, so they
+ * stay out. In-view membership lets a scroll that brings other nodes into
+ * view count as progress, while one that moves nothing (the page bottom)
+ * still reads as unchanged; raw coordinates stay out so small layout shifts
+ * do not count.
+ */
+function fingerprint(path: string, tree: ExecutorNode, viewport: { width: number; height: number }): string {
   let hash = 2166136261;
   const feed = (text: string): void => {
     for (let index = 0; index < text.length; index += 1) {
@@ -253,6 +260,8 @@ function fingerprint(path: string, tree: ExecutorNode): string {
     feed(JSON.stringify(node.states ?? null));
     feed('\0');
     feed(JSON.stringify(node.attributes ?? null));
+    feed('\0');
+    feed(intersects(node, viewport) ? 'v' : '-');
     feed('\0');
     for (const child of node.children ?? []) visit(child);
   };
