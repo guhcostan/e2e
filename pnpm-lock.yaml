@@ -349,8 +349,8 @@ importers:
   packages/decision:
     dependencies:
       '@ai-sdk/provider':
-        specifier: 4.0.18
-        version: 4.0.18
+        specifier: 4.0.17
+        version: 4.0.17
       zod:
         specifier: 4.6.1
         version: 4.6.1

@@ -215,9 +215,9 @@ function stalled(history: readonly HistoryEntry[]): boolean {
   if (history.length < 3) return false;
   return history.slice(-3).every((entry) => entry.pageChanged === false);
 }
-/** No tree to build an action space from. A truncated observation still acts on what is there. */
-function emptyTree(observation: { tree?: unknown; text: string; children?: unknown }): boolean {
-  return observation.tree === undefined;
+/** No nodes to build an action space from. A truncated observation still acts on what is there. */
+function emptyTree(observation: { tree?: { children?: readonly unknown[] } | undefined; text: string }): boolean {
+  return observation.tree === undefined || ((observation.tree.children ?? []).length === 0 && observation.text.trim() === "");
 }
 /** An automation limitation says nothing about the application correctness. */
 function blocked(summary: string): StepVerdict {
