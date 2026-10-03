@@ -52,8 +52,10 @@ suites that consume the built packages the way a user would.
     the `act` socket with a queue executor so every MCP call is a harness
     action), `src/oauth/` subscription sign-in (the `e2e login`, `logout`,
     and `models` commands and the `e2e/oauth/*` model constructors; each
-    constructor subpath is the only place its `@ai-sdk/*` optional peer is
-    imported, so the CLI boots without them). The constructors and the CLI
+    constructor subpath is the place its `@ai-sdk/*` optional peers are
+    imported, and the Copilot constructor loads `@ai-sdk/openai` lazily, only
+    for the Responses models, so the CLI boots without any of them). The
+    constructors and the CLI
     are the whole public surface: the flows, stores, and fetch behind them
     are module-private, not a library for other products. `tests/live/` holds hand-run
     checks that need a stored login and are never part of `pnpm test`.
@@ -156,7 +158,7 @@ pnpm --filter @e2e-dev/testbed run test:headed
   package `typecheck` covers `tests/**`, which is what makes
   `tests/types/sdk-types.ts` a test.
 - Integration tests need Chromium: `pnpm --filter @e2e-dev/web exec
-  playwright install chromium`. The web engine's `prepare` hook
+  playwright-core install chromium`. The web engine's `prepare` hook
   also installs a missing browser once per run, in the runner, before `plan`
   is emitted and the run's clock starts.
 
@@ -367,6 +369,13 @@ trees, on both platforms, without a device.
   commit the changed entries in the same pull request as the scenario change.
   The web benchmark's agent job runs with `--strict-cache`, so a recording a
   change broke fails with `REPLAY_STALE` instead of quietly calling the model.
+  That includes a change to the cache key (`REPLAY_POLICY_VERSION`, a new key
+  field, an engine minor): strict lists the file store and fails a step whose
+  key misses while an entry recorded for the same step sits under another key
+  (`cache/rekeyed.ts`). Only entries whose `recordedFor` names the whole step
+  (params digest, occurrence, agent) count; a `read-write` replay completes
+  an older one. Such a change re-records every entry and deletes the old ones
+  in the same pull request. A step that was never recorded still runs live.
   The web benchmark's entries are in. The mobile benchmark's iOS entries are
   recorded on a Mac; nobody has recorded on an Android emulator yet, so the
   Android side spends model calls until an emulator recording is committed.
@@ -411,10 +420,15 @@ trees, on both platforms, without a device.
     denied destinations, forbidden fills, and tainted pixels. Model text is
     never evaluated as code, selectors, shell, or config. App content, ledger
     text, and pixels are quoted as untrusted evidence with no policy authority.
-  - Every navigation a test or the agent asks for (`app.open`, the `navigate`
-    verb, `device.openLink`) goes through one rule: `file:`, `data:`, and
-    `javascript:` destinations and malformed URLs are `POLICY_DENIED`. There
-    is no origin or host allowlist; PR #290 removed them on purpose, since a
+  - Every navigation a test or the agent asks for (`app.open`,
+    `browser.goto`, the `navigate` verb) goes through one rule,
+    `resolveNavigationUrl`: only `http:`, `https:`, and the exact
+    `about:blank` pass; every other scheme (`view-source:file:` included) and
+    a malformed URL is `POLICY_DENIED` (a relative URL on a target with no
+    `app.url` is `APP_URL_REQUIRED`). `device.openLink` takes custom app
+    schemes, so it refuses a list instead (`packages/mobile/src/links.ts`):
+    `file:`, `data:`, `javascript:`, `view-source:`, `blob:`, `filesystem:`.
+    There is no origin or host allowlist; PR #290 removed them on purpose, since a
     click reaches any origin a typed URL could.
   - Sessions are per-run, target-bound, AES-256-GCM encrypted with a
     memory-only key, and deleted at cleanup; payloads never enter diagnostics.
@@ -502,7 +516,7 @@ trees, on both platforms, without a device.
   needs `node scripts/restore-peer-ranges.ts` after it, or `pnpm check` fails
   on the pin.
 - The runner publishes as the unscoped `e2e` (entry points `e2e`, `e2e/agent`,
-  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`; the bin is `e2e` too); engines, reporters, and integrations publish public
+  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`, `e2e/oauth/opencode-console`; the bin is `e2e` too); engines, reporters, and integrations publish public
   under the `@e2e-dev` scope. The `@e2edev` scope (moved to `@e2e-dev` on
   2026-09-28), `@e2edev/e2e`, `@e2edev/oauth` (folded into `e2e/oauth` on
   2026-09-21), and `@e2e-dev/integrations` (moved to `@e2e-dev/kernel` on

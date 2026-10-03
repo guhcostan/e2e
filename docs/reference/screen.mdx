@@ -107,7 +107,14 @@ await screen.getByTestId('memory-list', { visible: true }).getByRole('listitem')
 ```
 
 `visible` uses the same visibility check as `toBeVisible()`, `isVisible()`,
-and `waitFor()`. It works with scopes, `filter`, `first`, `last`, and `nth`:
+and `waitFor()`: what renders, as Playwright reads it. `display: none`,
+`visibility: hidden`, a box with no size, a closed `<details>` body, and
+content under `content-visibility: hidden` are hidden; `aria-hidden` is not,
+since a decorative spinner marked with it still paints, so
+`toBeHidden()` on one waits until it leaves. A child that sets
+`visibility: visible` under a hidden parent is visible. On the web, text
+directly under a `display: contents` element with `visibility: hidden` is
+hidden, where Playwright calls it visible. It works with scopes, `filter`, `first`, `last`, and `nth`:
 `getByText('Save', { visible: true }).first()` is the first visible match.
 Prefer it over `browser.locator('p:visible')`, which ties the test to CSS.
 
@@ -407,6 +414,12 @@ a heading; it does not throw.
 `toHaveText`, `toContainText`, and `toHaveAttribute`.
 `isEnabled`, `isDisabled`, `isChecked`, and `boundingBox` are allowed there.
 
+`boundingBox()` is `null` for a node that lays out no box (`display: none`
+on it or an ancestor), and a box for one `visibility: hidden` keeps.
+`inputValue()` and `toHaveValue` on a checkbox or radio read its value
+attribute, `on` when it has none, whatever its checked state; `isChecked()`
+reads the state.
+
 `isHidden` is `!isVisible()` and `isDisabled` is `!isEnabled()`, with the
 same strictness: `isHidden` is `true` for zero matches, `isDisabled` is
 `LOCATOR_NOT_FOUND` there, and both are `LOCATOR_AMBIGUOUS` on several.
@@ -529,7 +542,7 @@ export interface TextMatchOptions {
 /**
  * Role query options. A role query never matches a node hidden from the
  * accessibility tree, on every engine; `visible` (inherited) is the one knob
- * that narrows the other query kinds the same way.
+ * that narrows the other query kinds, to the nodes `toBeVisible()` accepts.
  */
 export interface RoleOptions extends TextMatchOptions {
   /** Accessible name filter. */
@@ -631,8 +644,10 @@ export type ScrollDirection = 'up' | 'down' | 'left' | 'right';
 export type Momentum = 'none' | 'slow' | 'fast';
 ```
 
-A role query never matches a node hidden from the accessibility tree.
-`visible` applies the same rule to the other query kinds. See
+A role query never matches a node hidden from the accessibility tree: one
+that does not render, or one under `aria-hidden`. `visible` narrows the
+other query kinds to the nodes that render, the check `toBeVisible()` makes,
+so an `aria-hidden` node that still paints counts as visible there. See
 [Hidden duplicates](#hidden-duplicates).
 
 `img` is an alias, not a role: `getByRole('img', { name })` builds the same

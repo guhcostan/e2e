@@ -2,10 +2,13 @@
  * The reader's `hidden` state, which `isVisible()`, `toBeVisible()`, and
  * `toBeHidden()` read, agrees with Playwright's own visibility on the cases
  * a rect count alone gets wrong: a hidden SVG, a zero-size box, closed
- * `<details>` content, and an empty `display: contents` element.
+ * `<details>` content, an empty `display: contents` element, skipped
+ * `content-visibility` content, and an `aria-hidden` node that still paints.
+ * The tree walk keeps `aria-hidden` subtrees out while it walks into a
+ * `visibility: hidden` one a child shows again.
  */
 
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SemanticNode } from 'e2e/engine';
 import { captureDocument } from '../../src/observation.ts';
@@ -49,6 +52,18 @@ const PAGE = `
   <div id="contents-hidden-child" style="display:contents"><span style="display:none">gone</span></div>
   <div id="contents-painted" style="display:contents"><button>Painted</button></div>
   <div id="contents-text" style="display:contents">bare text</div>
+  <div id="contents-hidden-element" style="display:contents;visibility:hidden"><span>hidden span</span></div>
+  <div id="contents-shown-child" style="display:contents;visibility:hidden"><span style="visibility:visible">shown span</span></div>
+  <div id="spinner" aria-hidden="true" style="width:40px;height:40px;background:#888">spinning</div>
+  <div aria-hidden="true"><button id="under-aria-hidden">Decorative</button></div>
+  <div id="skipping" style="content-visibility:hidden;width:50px;height:50px"><button id="skipped">Skipped</button></div>
+  <skip-host id="skipping-host" style="content-visibility:hidden;display:block;width:50px;height:50px"><button id="skipped-slotted">Slotted</button></skip-host>
+  <div id="vis-parent" style="visibility:hidden"><button id="vis-child" style="visibility:visible">Shown child</button></div>
+  <script>
+    customElements.define('skip-host', class extends HTMLElement {
+      connectedCallback() { this.attachShadow({ mode: 'open' }).innerHTML = '<div><slot></slot></div>'; }
+    });
+  </script>
 `;
 
 describe('visibility agrees with Playwright', () => {
@@ -72,8 +87,47 @@ describe('visibility agrees with Playwright', () => {
     ['a display: contents element whose only child is hidden', '#contents-hidden-child', true],
     ['a display: contents element with a painted child', '#contents-painted', false],
     ['a display: contents element with bare text', '#contents-text', false],
+    ['a hidden display: contents element whose child inherits it', '#contents-hidden-element', true],
+    ['a hidden display: contents element whose child is visible again', '#contents-shown-child', false],
+    ['an aria-hidden spinner that paints', '#spinner', false],
+    ['a button under an aria-hidden container', '#under-aria-hidden', false],
+    ['a content-visibility: hidden element, which keeps its box', '#skipping', false],
+    ['a button content-visibility: hidden skips', '#skipped', true],
+    ['a button slotted under a content-visibility: hidden host', '#skipped-slotted', true],
+    ['a visibility: hidden parent', '#vis-parent', true],
+    ['a child that sets visibility: visible under a hidden parent', '#vis-child', false],
   ])('%s', async (_case, selector, hidden) => {
     expect(await hiddenOf(selector)).toEqual({ reader: hidden, playwright: hidden });
+  });
+});
+
+describe('visibility where Playwright reads a range box alone', () => {
+  it('hides text under a display: contents element whose visibility is hidden, which Playwright calls visible', async () => {
+    await page.setContent('<div id="contents-hidden-text" style="display:contents;visibility:hidden">Invisible text</div>');
+    expect(await hiddenOf('#contents-hidden-text')).toEqual({ reader: true, playwright: false });
+  });
+});
+
+describe('the bounding box', () => {
+  /** The reader's rect for one element next to Playwright's `boundingBox()`. */
+  async function boxOf(selector: string) {
+    const locator = page.locator(selector);
+    const raw = await locator.evaluate(readSemanticsFunction<typeof READ_OPTIONS.mode>, READ_OPTIONS);
+    return { reader: raw.rect, playwright: await locator.boundingBox() };
+  }
+
+  it.each([
+    ['display: none', '<div id="box" style="display:none">gone</div>', null],
+    ['under a display: none ancestor', '<div style="display:none"><span id="box">gone</span></div>', null],
+    ['an empty display: contents element', '<div id="box" style="display:contents"></div>', null],
+    ['display: contents around text', '<div id="box" style="display:contents">text</div>', null],
+    ['visibility: hidden, which keeps its box', '<div id="box" style="visibility:hidden;width:30px;height:20px"></div>', { width: 30, height: 20 }],
+    ['a zero-size box', '<div id="box" style="width:0;height:0"></div>', { width: 0, height: 0 }],
+  ])('%s', async (_case, html, size) => {
+    await page.setContent(`<body style="margin:0">${html}</body>`);
+    const { reader, playwright } = await boxOf('#box');
+    expect(reader).toEqual(playwright);
+    expect(reader === null ? null : { width: reader.width, height: reader.height }).toEqual(size);
   });
 });
 
@@ -156,5 +210,24 @@ describe('an inert subtree', () => {
     `);
     const buttons = (await captureTree()).filter((node) => node.role === 'button').map((node) => node.name);
     expect(buttons).toEqual(['Outside']);
+  });
+});
+
+describe('the tree walk through hidden content', () => {
+  it('walks into a visibility: hidden subtree for a child that shows again, and stops at aria-hidden and skipped content', async () => {
+    await page.setContent(`
+      <div style="visibility:hidden"><button>Hidden parent</button><div><button style="visibility:visible">Shown child</button></div></div>
+      <div aria-hidden="true"><button>Decorative</button></div>
+      <div style="content-visibility:hidden;width:50px;height:50px" data-testid="skipping">Skipped text<button>Skipped</button></div>
+      <div style="display:contents;visibility:hidden"><button>Contents hidden</button></div>
+    `);
+    const nodes = await captureTree();
+    const buttons = nodes.filter((node) => node.role === 'button');
+    expect(buttons.map((node) => [node.name, node.states?.hidden])).toEqual([['Shown child', undefined]]);
+    const skipping = nodes.find((node) => node.testId === 'skipping');
+    expect(skipping?.states?.hidden).toBeUndefined();
+    // The container keeps its box and paints none of its text, which innerText reads empty too.
+    expect(skipping?.text).toBe('');
+    expect(await page.getByTestId('skipping').innerText()).toBe('');
   });
 });

@@ -96,6 +96,8 @@ export interface E2EConfig {
   cleanupTimeout?: number;
   /** Retries per test, 0 through 10; default 1 in CI, else 0. */
   retries?: number;
+  /** Fail the run when a test skips itself after a soft failure or an earlier failed attempt; default false. */
+  failOnSkippedFailure?: boolean;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
   /** `{ store }` hands every artifact to a host store as it is produced. */
@@ -157,6 +159,17 @@ Every numeric value must be a safe integer. `projectId` falls back to
 `unportable-<sha256 of the project root, 32 hex>` when there is no
 `package.json`. `workers` never exceeds what a target's engine declares. A
 targeted agent action is bounded by the smaller of `actionTimeout` and 15 s.
+
+## failOnSkippedFailure
+
+Set `failOnSkippedFailure: true` to fail the run with exit code 1 when a test
+skips after a soft assertion failure or skips a retry after an earlier failed
+attempt. The default is `false`.
+
+The test keeps its `skipped` status and reason. Its failures remain in the
+report, and the CLI shows them under `Skipped After Failure` with either
+setting. Clean skips, successful retries, and engine cleanup diagnostics do
+not trigger this policy. A skip still stops the body and does not retry.
 
 ## targets
 
@@ -267,8 +280,9 @@ it (no `app.command`) is `INVALID_CONFIG`. An `app.command` with neither
 
 ### The app's site
 
-A test or the agent may open any http(s) URL; `file:`, `data:`, and
-`javascript:` are `POLICY_DENIED`. The site of `url`, its registrable domain
+A test or the agent may open any http(s) URL, and `about:blank`; every
+other scheme (`file:`, `data:`, `javascript:`, `view-source:`, `blob:`) is
+`POLICY_DENIED`. The site of `url`, its registrable domain
 (`app.example.com` and `auth.example.com` are one site), scopes two things:
 the browser engine's [`headers`](/reference/web#options) reach the
 site and no other host, and child frames off the site stay out of
@@ -369,7 +383,7 @@ run.
 | `report.json` | The canonical report; `--last-failed` reads the one here |
 | `junit.xml`, `summary.md`, `failures/` | The `junit` and `markdown` reporters' files |
 | `ai-trace.json` | `--ai-trace` |
-| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared once a run's tests start, so it holds the latest run's evidence and nothing its report no longer names |
+| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared once a run's tests start, so it holds the latest run's evidence and nothing its report no longer names. A `--last-failed` rerun keeps the files the report it reruns names and writes its own attempts under `artifacts/rerun-<n>/` |
 | `sessions/` | The run's encrypted `test.setup` sessions, deleted when it ends |
 | `videos/<session>/` | [`e2e mcp`](/reference/mcp#recording) session recordings |
 
@@ -754,8 +768,9 @@ export interface ModelInstance {
 }
 ```
 
-Construct the model in your config with an AI SDK provider. For subscription
-sign-in, use the [`e2e/oauth/*` models](/subscriptions).
+Construct the model in your config with an AI SDK provider. You can use all
+providers that support tool calls, see [AI SDK providers](/models#ai-sdk-providers).
+For subscription sign-in, use the [`e2e/oauth/*` models](/subscriptions).
 
 | Gateway | Constructor | Package | Reads |
 | --- | --- | --- | --- |
@@ -798,7 +813,9 @@ Credentials and secrets are separate namespaces: `secrets.get(name)` returns a
 reports know that handle as `<name>.password` (`<secret:admin.password>`), so
 `credentials.admin` and `secrets.admin` can both exist; a `secrets` entry
 named exactly `admin.password` beside an `admin` credential is
-`INVALID_CONFIG`.
+`INVALID_CONFIG`. So are two credentials whose names map to one
+`E2E_USER_<NAME>_*` override, like `svc-a` and `svc_a` (see
+[Environment variables](/reference/environment)).
 
 ```ts
 /** Named test identity. The password remains an opaque Secret. */
@@ -824,7 +841,8 @@ export type SecretConfig = string | SecretProvider;
 
 An entry is a static value, or a provider called on every authorized fill (a
 vault lookup, a freshly computed TOTP). It is recorded in the config digest by
-name only, and an `E2E_SECRET_<NAME>` override wins over both. Every entry
+name only, and an `E2E_SECRET_<NAME>` override wins over both. Two entries whose
+names map to one variable, like `api-key` and `api_key`, are `INVALID_CONFIG`. Every entry
 must resolve to a string of at least 6 characters (code points) or a
 function; anything else is `INVALID_CONFIG`. The minimum exists for redaction: every occurrence
 of a value becomes `<secret:name>`, and a shorter value would take ordinary

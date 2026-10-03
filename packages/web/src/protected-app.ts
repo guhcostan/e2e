@@ -5,7 +5,7 @@
  * context it creates; nothing here holds state.
  */
 
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext } from 'playwright-core';
 import { sameSite, type ResolveSecretOptions, type Secret } from 'e2e/engine';
 import type { WebBasicAuth } from './surface.ts';
 
@@ -15,18 +15,53 @@ export interface PlaywrightHttpCredential {
   readonly password: string;
 }
 
+/** An HTTP header field name: one or more `token` characters (RFC 9110). */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** A control character no HTTP field value may carry; a horizontal tab is the one the grammar allows. */
+// oxlint-disable-next-line no-control-regex -- the control characters are the point
+export const FIELD_VALUE_CONTROL = /[\u0000-\u0008\u000A-\u001F\u007F]/;
+
+/**
+ * Why the browser could not send this header, or `undefined` when it can: a
+ * name outside the token grammar, a value that is not a string, or one
+ * carrying a control character (a line break is a header-injection vector).
+ * Config and route overrides both check headers here.
+ */
+export function headerProblem(name: string, value: unknown): string | undefined {
+  if (!HEADER_NAME.test(name)) return `has an invalid header name: "${name}"`;
+  if (typeof value !== 'string') return `header "${name}" must be a string, got ${typeof value}`;
+  if (FIELD_VALUE_CONTROL.test(value)) return `header "${name}" must not contain a control character`;
+  return undefined;
+}
+
 /** Header names lowercased, as Playwright reports a request's own headers. */
 export function lowercaseNames(headers: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
   return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
 }
 
 /**
+ * The configured headers a request to `url` carries: all of them for the
+ * app's site, none for any other site or when there is no site policy.
+ */
+export function siteHeadersFor(
+  url: string | URL,
+  site: string | undefined,
+  headers: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (headers === undefined || site === undefined) return undefined;
+  return sameSite(url, site) ? headers : undefined;
+}
+
+/**
  * Adds the configured headers to every request bound for the app's site,
  * via a context route that falls back to the network. A request for any
  * other site is not routed at all; without a site there is no policy and
- * nothing is routed. Nothing awaits a route handler, so a fallback that
- * fails (the page closed under the request) is dropped rather than left to
- * surface as an unhandled rejection.
+ * nothing is routed. Registered before any test route, so it runs last: a
+ * test route's `fallback` reaches it, and a `continue`, which skips it,
+ * merges the same headers itself (`siteHeadersFor`). Nothing awaits a route
+ * handler, so a fallback that fails (the page closed under the request) is
+ * dropped rather than left to surface as an unhandled rejection.
  */
 export async function installSiteHeaders(
   context: BrowserContext,
@@ -35,7 +70,7 @@ export async function installSiteHeaders(
 ): Promise<void> {
   if (headers === undefined || site === undefined) return;
   await context.route(
-    (url) => sameSite(url, site),
+    (url) => siteHeadersFor(url, site, headers) !== undefined,
     async (route) => {
       await route.fallback({ headers: { ...route.request().headers(), ...headers } }).catch(() => undefined);
     },

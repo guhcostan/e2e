@@ -6,7 +6,7 @@
  * fixture the way a device engine contributes `device`.
  */
 
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright-core';
 import {
   ConfigurationError,
   defineEngine,
@@ -22,6 +22,8 @@ import { createRequire } from 'node:module';
 import { asBrowserProvider } from './provider.ts';
 import { PlaywrightSurface, type WebOptions } from './surface.ts';
 import { createBrowserFixture } from './browser.ts';
+import { validateInitScripts } from './init-scripts.ts';
+import { FIELD_VALUE_CONTROL, headerProblem } from './protected-app.ts';
 
 /** App fields only a device target reads. */
 const NATIVE_APP_KEYS = ['bundleId', 'appPath', 'launchArguments', 'permissions'] as const;
@@ -81,6 +83,9 @@ export function web(options: WebOptions = {}): EngineHandle {
   if (options.basicAuth !== undefined) validateBasicAuth(options.basicAuth);
   if (options.testIdAttribute !== undefined) validateTestIdAttribute(options.testIdAttribute);
   if (options.userAgent !== undefined) validateUserAgent(options.userAgent, options.headers);
+  if (options.locale !== undefined) validateLocale(options.locale, options.headers);
+  if (options.timezoneId !== undefined) validateTimezoneId(options.timezoneId);
+  if (options.initScripts !== undefined) validateInitScripts(options.initScripts);
   if (options.screencast !== undefined) validateScreencast(options.screencast);
   const reconnecting = options.connect?.reconnectEndpoint !== undefined;
   if (reconnecting && typeof options.connect?.reconnectEndpoint !== 'function') {
@@ -89,10 +94,11 @@ export function web(options: WebOptions = {}): EngineHandle {
   // A per-attempt lease rides the same persistent context as `reconnectEndpoint`, with the same limits.
   const recoverable = reconnecting || provider?.scope === 'attempt';
   const mode = provider === undefined ? 'connect.reconnectEndpoint' : `browser provider "${provider.name}" with scope "attempt"`;
-  if (recoverable && (options.headers !== undefined || options.basicAuth !== undefined || options.userAgent !== undefined)) {
+  const creationOptions = CREATION_OPTION_KEYS.filter((key) => options[key] !== undefined);
+  if (recoverable && creationOptions.length > 0) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      `${mode} uses a persistent context; headers, basicAuth, and userAgent require a newly created context`,
+      `${mode} uses a persistent context; ${creationOptions.join(', ')} ${creationOptions.length === 1 ? 'requires' : 'require'} a newly created context`,
     );
   }
   const surface = new PlaywrightSurface(options);
@@ -163,7 +169,13 @@ const WEB_OPTION_KEYS: readonly string[] = Object.keys({
   basicAuth: true,
   testIdAttribute: true,
   userAgent: true,
+  locale: true,
+  timezoneId: true,
+  initScripts: true,
 } satisfies Record<keyof WebOptions, true>);
+
+/** The options applied when the engine creates a browser context, which a persistent context never is. */
+const CREATION_OPTION_KEYS = ['headers', 'basicAuth', 'userAgent', 'locale', 'timezoneId'] as const satisfies readonly (keyof WebOptions)[];
 
 /**
  * What a persistent context rules out, named with its cause: `what` replaces
@@ -177,13 +189,6 @@ function persistentContextLimit(what: string, mode: string, leased: boolean): Co
     `${what} is unavailable with ${mode}: it replaces the browser context, and the attempt rides one persistent context${remedy}`,
   );
 }
-
-/** An HTTP header field name: one or more `token` characters (RFC 9110). */
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-
-/** A control character no HTTP field value may carry; a horizontal tab is the one the grammar allows. */
-// oxlint-disable-next-line no-control-regex -- the control characters are the point
-const FIELD_VALUE_CONTROL = /[\u0000-\u0008\u000A-\u001F\u007F]/;
 
 /** True for a plain object; the shape both options take. Config runs as JavaScript, so the types alone are no guard. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -201,21 +206,8 @@ function validateHeaders(headers: unknown): void {
     throw new ConfigurationError('INVALID_CONFIG', 'web({ headers }) must be an object of header name to value');
   }
   for (const [name, value] of Object.entries(headers)) {
-    if (!HEADER_NAME.test(name)) {
-      throw new ConfigurationError('INVALID_CONFIG', `web({ headers }) has an invalid header name: "${name}"`);
-    }
-    if (typeof value !== 'string') {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `web({ headers }) header "${name}" must be a string, got ${typeof value}`,
-      );
-    }
-    if (FIELD_VALUE_CONTROL.test(value)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `web({ headers }) header "${name}" must not contain a control character`,
-      );
-    }
+    const problem = headerProblem(name, value);
+    if (problem !== undefined) throw new ConfigurationError('INVALID_CONFIG', `web({ headers }) ${problem}`);
   }
 }
 
@@ -251,6 +243,62 @@ function validateUserAgent(userAgent: unknown, headers: Readonly<Record<string, 
   }
   if (headers !== undefined && Object.keys(headers).some((name) => name.toLowerCase() === 'user-agent')) {
     throw new ConfigurationError('INVALID_CONFIG', 'web({ userAgent }) and a user-agent header in web({ headers }) conflict; set userAgent only');
+  }
+}
+
+/**
+ * Refuses a locale that is not a BCP 47 tag, and one an `accept-language`
+ * header would override on the app's site while `navigator.language` kept
+ * reporting it.
+ */
+function validateLocale(locale: unknown, headers: Readonly<Record<string, string>> | undefined): void {
+  if (typeof locale !== 'string' || locale === '' || !isLanguageTag(locale)) {
+    throw new ConfigurationError('INVALID_CONFIG', `web({ locale }) must be a BCP 47 language tag such as "de-DE", got ${JSON.stringify(locale)}`);
+  }
+  if (headers !== undefined && Object.keys(headers).some((name) => name.toLowerCase() === 'accept-language')) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ locale }) and an accept-language header in web({ headers }) conflict; set locale only');
+  }
+}
+
+/**
+ * True when `tag` names a language the browser can run in: a Unicode locale
+ * `Intl.Locale` parses, other than the undetermined `und`, which Chromium
+ * refuses at context creation as it does a private-use-only tag.
+ */
+function isLanguageTag(tag: string): boolean {
+  try {
+    const { language } = new Intl.Locale(tag);
+    return language !== undefined && language !== 'und';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refuses, at config load, a time zone the browser would otherwise refuse at
+ * the first context. Best effort: Node cannot tell a miscased alias
+ * (`us/eastern`) from the real one, so the browser's own `Invalid timezone ID`
+ * stays the final word.
+ */
+function validateTimezoneId(timezoneId: unknown): void {
+  if (typeof timezoneId !== 'string' || timezoneId === '' || !isTimeZone(timezoneId)) {
+    throw new ConfigurationError('INVALID_CONFIG', `web({ timezoneId }) must be an IANA time zone such as "Europe/Berlin", got ${JSON.stringify(timezoneId)}`);
+  }
+}
+
+/**
+ * True when `timeZone` is an IANA name `Intl` resolves, spelled with its own
+ * case. Node also takes an offset (`+01:00`) and any casing (`europe/berlin`),
+ * both of which Chromium refuses; an alias resolving to another name
+ * (`US/Eastern`) is fine.
+ */
+function isTimeZone(timeZone: string): boolean {
+  if (/^[+-]/.test(timeZone)) return false;
+  try {
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone;
+    return resolved === timeZone || resolved.toLowerCase() !== timeZone.toLowerCase();
+  } catch {
+    return false;
   }
 }
 

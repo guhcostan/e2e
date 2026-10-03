@@ -7,9 +7,10 @@ description: The browser engine, its options, and the browser fixture it contrib
 A web target names it as its engine, and it contributes the `browser` fixture for
 browser-only work. Import `test` from the package to have `browser` typed.
 
-The package declares `playwright` as a peer dependency (`>=1.63.0 <2`) and
-does not install it. An app that already depends on Playwright keeps its
-version; `e2e init` adds `playwright` only to a project that has none.
+The package depends on `playwright-core` pinned to an exact version, so the
+engine always runs the Playwright it was tested against. An app that depends
+on Playwright itself keeps its own copy; the two share a browser cache only
+when their versions match.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
@@ -19,6 +20,31 @@ export default {
   targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
 } satisfies E2EConfig;
 ```
+
+## Installing browsers
+
+A missing browser downloads once per run, before the run's clock starts. To
+install browsers as their own step, in CI or a container image, run the
+package's command. It installs the browsers for the Playwright version the
+engine pins:
+
+<CodeGroup>
+```bash npm
+npx @e2e-dev/web install chromium --with-deps
+```
+
+```bash pnpm
+pnpm exec e2e-web install chromium --with-deps
+```
+
+```bash bun
+bunx @e2e-dev/web install chromium --with-deps
+```
+</CodeGroup>
+
+Name any of `chromium`, `firefox`, and `webkit`; with none named it installs
+`chromium`. `--with-deps` also installs the system libraries the browsers need
+on Linux. The command exits with the installer's exit code.
 
 ## Options
 
@@ -82,7 +108,26 @@ export interface WebOptions {
    * (`connect.reconnectEndpoint`, or a provider with `scope: 'attempt'`).
    */
   readonly userAgent?: string;
+  /**
+   * The locale every attempt's context runs in, a BCP 47 tag such as
+   * `de-DE`: what `navigator.language`, `Intl` formatting, and the
+   * `Accept-Language` header report. Defaults to the browser's own. An
+   * `accept-language` entry in `headers` beside it is `INVALID_CONFIG`, and
+   * so is a persistent context.
+   */
+  readonly locale?: string;
+  /**
+   * The IANA time zone every attempt's context runs in, such as
+   * `Europe/Berlin`: what `Date` and `Intl` resolve local time against.
+   * Defaults to the machine's. A persistent context is `INVALID_CONFIG`.
+   */
+  readonly timezoneId?: string;
+  /** Scripts every document runs before the page's own. See [Init scripts](#init-scripts). */
+  readonly initScripts?: readonly WebInitScript[];
 }
+
+/** JavaScript source, a file relative to the project root, or a function. */
+export type WebInitScript = string | { readonly path: string } | (() => unknown);
 
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
 export interface WebScreencastOptions {
@@ -180,7 +225,7 @@ recording resume, but a segment lost during the disconnect cannot be recovered.
 Code using `surfaceOf(engine)` must read its accessors again after recovery;
 previously retained Playwright objects belong to the disconnected transport.
 
-Persistent recovery does not support `headers`, `basicAuth`, `userAgent`, `app.clearState`,
+Persistent recovery does not support `headers`, `basicAuth`, `userAgent`, `locale`, `timezoneId`, `app.clearState`,
 or session state capture and restore. `app.restart` remains available. Omit
 `reconnectEndpoint` to keep ordinary isolated contexts and the existing behavior.
 A `browser` provider with `scope: 'attempt'` rides the same persistent
@@ -202,7 +247,7 @@ a page acts on that tab: `goto`, `reload`, `back`, `forward`, `url`, `title`,
 `waitForURL`, `locator`, `frameLocator`, `evaluate`, `waitForResponse`,
 `waitForDownload`, `keyboard`, `mouse`, the `expect(browser)` matchers, and
 every `screen` query. What belongs to the browser covers every tab:
-`cookies`, `setCookies`, `route`, `unroute`, and `onDialog`. `setViewport`
+`cookies`, `setCookies`, `route`, `unroute`, `onDialog`, and `addInitScript`. `setViewport`
 sizes the active tab and every tab opened after it.
 
 A tab the app opens itself, from a `target="_blank"` link or `window.open`,
@@ -253,6 +298,10 @@ export interface Browser extends Expectable<BrowserExpectation> {
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
+  /** Adds a script every document runs before the page's own, from the next navigation on. */
+  addInitScript(script: string | { path: string } | (() => unknown)): Promise<void>;
+  /** Adds an init script function called with one JSON argument. */
+  addInitScript<Arg extends JsonValue>(script: (arg: Arg) => unknown, arg: Arg): Promise<void>;
   /** Adds an attempt-scoped network route. */
   route(
     pattern: string | RegExp,
@@ -308,7 +357,7 @@ export interface Browser extends Expectable<BrowserExpectation> {
 | `goto`, `reload`, `back`, `forward` | `config.timeout`, 120000 ms, the same budget `app.open()` uses; `{ timeout }` overrides, capped by the test deadline |
 | `waitForResponse`, `waitForDownload` | `config.actionTimeout`, 30000 ms; `{ timeout }` overrides, capped by the test deadline |
 | `waitForURL` | `config.assertionTimeout`, 5000 ms |
-| `url`, `title`, `evaluate`, `route`, `unroute`, `cookies`, `setCookies`, `setViewport`, `onDialog`, `keyboard.*`, `mouse.*` | `config.actionTimeout`, 30000 ms, not overridable |
+| `url`, `title`, `evaluate`, `addInitScript`, `route`, `unroute`, `cookies`, `setCookies`, `setViewport`, `onDialog`, `keyboard.*`, `mouse.*` | `config.actionTimeout`, 30000 ms, not overridable |
 
 Every `browser` call is a recorded `browser.<method>` step, except `locator` and
 `frameLocator`: they build a locator without touching the page, and the
@@ -319,7 +368,7 @@ in a suite that also runs on other platforms.
 ### Navigation
 
 `goto` defaults `waitUntil` to `'load'` and throws `POLICY_DENIED` for a
-`file:`, `data:`, or `javascript:` URL. `waitForURL` polls every 100 ms; a
+URL whose scheme is not `http:` or `https:` (`about:blank` is admitted). `waitForURL` polls every 100 ms; a
 relative string resolves against the base URL and matches exactly after
 normalization, a `RegExp` tests the full URL, anything else (a predicate
 function, say) is `INVALID_ARGUMENT`, and a timeout is `ASSERTION_FAILED`. It
@@ -391,16 +440,49 @@ const flag = await browser.evaluate(
 );
 ```
 
+### Init scripts
+
+An init script runs in every document before the page's own scripts, in every
+tab and frame. `web({ initScripts })` applies to every test;
+`browser.addInitScript` adds one for the rest of the test.
+
+A script is JavaScript source, a `{ path }` relative to the project root, or a
+function. A function cannot close over test variables; pass a JSON `arg`
+instead.
+
+```ts
+await browser.addInitScript((value) => { Math.random = () => value; }, 0.5);
+await app.open('/raffle');
+```
+
+A script added after the page opened runs from the next navigation or reload.
+
 ### Routing
 
 `route`, `unroute`, and `waitForResponse` take a string pattern (`*` within a
 path segment, `**` across `/`) or a `RegExp`, both tested against the full
 URL; a predicate function is `INVALID_ARGUMENT`. A route survives
 `app.restart()`, `app.clearState()`, and session restore.
-The handler must decide exactly once with `fulfill`, `continue`, or `abort`;
-deciding twice or not at all is `ACTION_FAILED`, as is a `waitForResponse`
-that nothing matches inside the deadline. The response resolves once its body
-is known: `url`, `status`, and `headers` are always readable, and a body the
+The handler must decide exactly once with `fulfill`, `continue`, `fallback`,
+or `abort`; deciding twice or not at all is `ACTION_FAILED`. Routes run newest
+first. `continue` sends the request to the network and no other route sees
+it; its `url` resolves against the base URL and goes through the same rule as
+`goto`, so a forbidden scheme is `POLICY_DENIED`, and it must keep the
+request's scheme. `headers` replaces every request header. The configured
+`headers` still ride a continued request bound for the app's site, and only
+that site. `fallback` hands the request to the route registered before this
+one, or the network when none matches. `fulfill` takes one of `json`, `body`,
+or `path`, a file relative to the project root whose extension sets the
+`Content-Type` unless `contentType` or a `content-type` header does. An option
+a decision does not take (Playwright's `abort(errorCode)`, a misspelled key) is
+`INVALID_ARGUMENT`: the request is aborted and the next step fails.
+
+A `waitForResponse` that nothing matches inside the deadline is
+`ACTION_FAILED`. The deadline bounds the match: the response resolves as soon
+as its headers arrive, and `text()` and `json()` wait for the body on a budget
+of their own, `config.actionTimeout` capped by the test deadline; a body still
+streaming when it runs out is `ACTION_FAILED`. `url`, `status`, and `headers`
+are always readable, and a body the
 browser could not read (a connection reset short of the declared
 `Content-Length`, a request the page aborted, or a redirect, whose body the
 browser never keeps) rejects `text()` and `json()` with `ACTION_FAILED`
@@ -421,15 +503,34 @@ expect(response.status).toBe(201);
 ```
 
 ```ts
-/** `json` or `body`, never both; neither fulfills with an empty body. */
+/**
+ * One of `json`, `body`, or `path`, or none for an empty body. `path` names a
+ * file relative to the project root; its `Content-Type` follows its
+ * extension unless `contentType` or a `content-type` header sets one.
+ */
 export type RouteFulfillResponse = {
   status?: number;
   headers?: Record<string, string>;
+  /** Sets the `Content-Type` response header. */
+  contentType?: string;
 } & (
-  | { json: JsonValue; body?: never }
-  | { body: string; json?: never }
-  | { body?: never; json?: never }
+  | { json: JsonValue; body?: never; path?: never }
+  | { body: string; json?: never; path?: never }
+  | { path: string; json?: never; body?: never }
+  | { body?: never; json?: never; path?: never }
 );
+
+/** What `continue` changes about the request before it goes to the network. */
+export interface RouteContinueOverrides {
+  /** Resolved against the base URL like `goto`; must keep the request's scheme. */
+  url?: string;
+  /** Request method. */
+  method?: string;
+  /** Replaces every request header; the configured `headers` for the app's site are added on top. */
+  headers?: Record<string, string>;
+  /** Request body. */
+  postData?: string;
+}
 
 export interface WebRoute {
   /** The intercepted request. */
@@ -441,8 +542,10 @@ export interface WebRoute {
   };
   /** Fulfills the intercepted request once. */
   fulfill(response: RouteFulfillResponse): Promise<void>;
-  /** Continues the intercepted request once. */
-  continue(): Promise<void>;
+  /** Sends the intercepted request to the network once, skipping every other route. */
+  continue(overrides?: RouteContinueOverrides): Promise<void>;
+  /** Hands the intercepted request to the route registered before this one, or the network when none matches. */
+  fallback(): Promise<void>;
   /** Aborts the intercepted request once. */
   abort(): Promise<void>;
 }
@@ -454,9 +557,9 @@ export interface WebResponse {
   readonly status: number;
   /** Response headers, lower-cased names. */
   readonly headers: Readonly<Record<string, string>>;
-  /** Parses the response body as JSON. */
+  /** Waits for the body and parses it as JSON. */
   json<T = unknown>(): Promise<T>;
-  /** Reads the response body as text. */
+  /** Waits for the body and reads it as text. */
   text(): Promise<string>;
 }
 ```
@@ -464,7 +567,8 @@ export interface WebResponse {
 ### Cookies and viewport
 
 `setCookies` validates every cookie before setting any; an unparseable
-target or a forbidden scheme is `POLICY_DENIED` and nothing is set. For the
+target or a forbidden scheme is `POLICY_DENIED` and nothing is set. A
+relative `url` resolves against the base URL, as `goto` resolves it. For the
 `domain` form the scheme follows the base URL and a leading `.` is stripped.
 `setViewport` records the new size on the report. It works before the first
 navigation too, as Playwright's `setViewportSize` does: the next `app.open`
@@ -586,7 +690,7 @@ cannot reuse node IDs or publish handles over a newer observation.
 `BrowserProvider`, `BrowserProviderScope`, `BrowserRequest`, `BrowserLease`,
 `BrowserReleaseContext`, `BrowserProviderDownloads`, `BrowserDownloadContext`,
 `PlaywrightLiveSurface`, `Browser`, `FrameScreen`,
-`BrowserExpectation`, `WebRoute`, `RouteFulfillResponse`, `WebResponse`,
+`BrowserExpectation`, `WebRoute`, `RouteFulfillResponse`, `RouteContinueOverrides`, `WebResponse`,
 `Cookie`, `CookieFields`, `Dialog`, and `DialogHandler` are exported from the
 package for typing config helpers and fixtures. The runtime exports are
 `web`, [`surfaceOf`](#surfaceof), and `test`, `describe`, `beforeEach`,

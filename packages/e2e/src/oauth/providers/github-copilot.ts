@@ -123,24 +123,45 @@ export async function sendCopilotRequest(request: Request, credentials: CopilotC
   if (credentials.enterpriseUrl !== undefined && url.origin === COPILOT_API_URL) url.host = new URL(copilotBaseUrl(credentials.enterpriseUrl)).host;
   const headers = new Headers(request.headers);
   headers.set('openai-intent', 'conversation-edits');
-  let initiator = 'user';
-  let vision = false;
   const text = request.method === 'POST' ? await request.text() : undefined;
-  if (text !== undefined) {
-    try {
-      const body = JSON.parse(text) as { messages?: Array<{ role?: string; content?: unknown }> };
-      const messages = Array.isArray(body.messages) ? body.messages : [];
-      if (messages.at(-1)?.role !== 'user') initiator = 'agent';
-      vision = messages.some(
-        (message) => Array.isArray(message.content) && message.content.some((part: { type?: string }) => part?.type === 'image_url'),
-      );
-    } catch {
-      // Not JSON; the headers stay at their defaults.
-    }
-  }
-  headers.set('x-initiator', initiator);
-  if (vision) headers.set('copilot-vision-request', 'true');
+  const turn = copilotTurn(text);
+  headers.set('x-initiator', turn.initiator);
+  if (turn.vision) headers.set('copilot-vision-request', 'true');
   return upstream(new Request(url, { method: request.method, headers, signal: request.signal, ...(text === undefined ? {} : { body: text }) }));
+}
+
+/** One turn of either protocol: a chat `messages[]` entry or a Responses `input[]` item. */
+interface CopilotTurn {
+  readonly role?: unknown;
+  readonly content?: unknown;
+}
+
+/**
+ * Reads who initiated the turn and whether images are present, whichever
+ * protocol carried the body. Chat completions put turns in `messages[]` and
+ * images in `image_url` parts; the Responses API puts them in `input[]` with
+ * `input_image`. A body shaped like neither keeps the defaults.
+ */
+function copilotTurn(text: string | undefined): { initiator: 'user' | 'agent'; vision: boolean } {
+  if (text === undefined) return { initiator: 'user', vision: false };
+  try {
+    const body = JSON.parse(text) as { messages?: unknown; input?: unknown };
+    // A Responses body has `input` and no `messages`; anything else stays on the chat path.
+    if (!Array.isArray(body.messages) && Array.isArray(body.input)) {
+      const input = body.input as CopilotTurn[];
+      return { initiator: input.at(-1)?.role === 'user' ? 'user' : 'agent', vision: input.some((item) => hasPart(item.content, 'input_image')) };
+    }
+    const messages = Array.isArray(body.messages) ? (body.messages as CopilotTurn[]) : [];
+    return { initiator: messages.at(-1)?.role === 'user' ? 'user' : 'agent', vision: messages.some((message) => hasPart(message.content, 'image_url')) };
+  } catch {
+    // Not JSON; the headers stay at their defaults.
+    return { initiator: 'user', vision: false };
+  }
+}
+
+/** Whether a turn's content carries a part of the given type (`image_url` for chat, `input_image` for Responses). */
+function hasPart(content: unknown, type: string): boolean {
+  return Array.isArray(content) && content.some((part: { type?: string }) => part?.type === type);
 }
 
 /** One entry of the Copilot API's `/models`, as far as the listing reads it. */
@@ -156,9 +177,9 @@ interface CopilotModel {
 
 /**
  * The chat models the Copilot plan serves; embeddings and other kinds are
- * left out because only chat models fit `copilot()`. A model the plan has
- * not enabled, or one Copilot serves without `/chat/completions`, is listed
- * but marked: `copilot()` posts to `/chat/completions`, which rejects both. The
+ * left out because only chat models fit `copilot()`. A model it cannot call
+ * at all is listed but marked: one the plan has not enabled, or one Copilot
+ * serves only over APIs `copilot()` does not speak (such as Messages). The
  * request goes through `send`, so an enterprise login lists its own host.
  */
 async function listCopilotModels(fetch: FetchFunction): Promise<SubscriptionModel[]> {
@@ -176,7 +197,7 @@ async function listCopilotModels(fetch: FetchFunction): Promise<SubscriptionMode
         supports?.vision === true ? 'vision' : undefined,
         model.preview === true ? 'preview' : undefined,
         typeof model.policy?.state === 'string' && model.policy.state !== 'enabled' ? 'not enabled' : undefined,
-        servesChatCompletions(model) ? undefined : 'no chat completions',
+        copilotProtocol(model) === undefined ? 'no chat or responses' : undefined,
       ].filter((part) => part !== undefined);
       return {
         id: model.id as string,
@@ -186,7 +207,43 @@ async function listCopilotModels(fetch: FetchFunction): Promise<SubscriptionMode
     });
 }
 
-/** Whether `copilot()` can reach the model; an entry that names no endpoints is served over chat completions. */
-function servesChatCompletions(model: CopilotModel): boolean {
-  return !Array.isArray(model.supported_endpoints) || model.supported_endpoints.includes('/chat/completions');
+/** The endpoint `copilot()` reaches a Copilot chat model over: chat completions or the Responses API. */
+export type CopilotProtocol = 'chat' | 'responses';
+
+/**
+ * Which endpoint `copilot()` reaches `modelId` on, read from the Copilot
+ * API's `GET /models`, or `undefined` when the listing could not be read
+ * (an error status, a body that is not JSON, the network, the signal), so
+ * the caller can ask again instead of remembering a guess. A model the
+ * listing does not name, or names with no endpoint `copilot()` speaks, is
+ * chat: the vendor's own error then explains it. A rejected login is not a
+ * missing listing and rejects.
+ */
+export async function copilotProtocolFor(modelId: string, fetch: FetchFunction, signal: AbortSignal): Promise<CopilotProtocol | undefined> {
+  try {
+    const response = await fetch(new Request(`${COPILOT_API_URL}/models`, { signal }));
+    if (!response.ok) return undefined;
+    const payload = (await response.json()) as { data?: unknown };
+    if (!Array.isArray(payload.data)) return undefined;
+    return copilotProtocol((payload.data as CopilotModel[]).find((model) => model.id === modelId)) ?? 'chat';
+  } catch (error) {
+    if (error instanceof OAuthError) throw error;
+    return undefined;
+  }
+}
+
+/**
+ * The protocol one `/models` entry is served on, or `undefined` when
+ * `copilot()` cannot call it. An entry that names no endpoints is chat, as
+ * Copilot's older models are; chat completions wins when both are named, so
+ * a model that worked over chat keeps doing so. Whether the plan enabled the
+ * model is a separate question: Copilot rejects a disabled model the same
+ * way on either endpoint.
+ */
+function copilotProtocol(model: CopilotModel | undefined): CopilotProtocol | undefined {
+  const endpoints = model?.supported_endpoints;
+  if (model === undefined || !Array.isArray(endpoints)) return 'chat';
+  if (endpoints.includes('/chat/completions')) return 'chat';
+  if (endpoints.includes('/responses')) return 'responses';
+  return undefined;
 }

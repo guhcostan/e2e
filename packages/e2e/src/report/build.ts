@@ -14,6 +14,7 @@ import { packageVersion } from '../internal/package-version.ts';
 import { projectRelativePath } from '../internal/source.ts';
 import type { VcsInfo } from '../internal/vcs.ts';
 import type { SkipInfo } from '../collect/select.ts';
+import { someSkippedAfterFailure } from '../run/records.ts';
 import type {
   ArtifactRecord,
   AttemptRecord,
@@ -319,14 +320,36 @@ export interface ReportUsage {
   estimatedCostUsd?: number;
 }
 
+/**
+ * The run's counts by result. `passed`, `failed` (timed out included),
+ * `interrupted`, `flaky`, and `skipped` count selected results only and add
+ * up to `selected`; `discovered` minus `selected` is what the selection left
+ * out.
+ */
 export interface ReportSummary {
   discovered: number;
   selected: number;
   executed: number;
   passed: number;
   failed: number;
+  /** Stopped by the run (a signal, `--max-failures`, a run-level error) before reaching a verdict; never counted as failed. */
+  interrupted: number;
   flaky: number;
   skipped: number;
+}
+
+/**
+ * What earlier runs left unresolved that a `--last-failed` rerun did not run
+ * again, because another filter left it out: the results as those runs
+ * reported them, the serial groups their members' attempts live on, and the
+ * suite hook failures whose scope still holds a carried test. The next
+ * `--last-failed` selects these tests too, so a test that never ran again
+ * stays owed until it does.
+ */
+export interface ReportCarried {
+  results: readonly ReportResult[];
+  serialGroups: readonly ReportSerialGroup[];
+  errors: readonly ReportError[];
 }
 
 export interface Report1Document {
@@ -359,6 +382,11 @@ export interface Report1Document {
     summary: ReportSummary;
     limits: ReportLimits;
     usage: ReportUsage;
+    /**
+     * Present on a `--last-failed` rerun that left out a test an earlier run
+     * did not pass. Not part of this run's status, exit code, or summary.
+     */
+    carried?: ReportCarried | undefined;
     /** Present on an `e2e explore` run only. */
     explore?: ReportExplore | undefined;
   };
@@ -503,19 +531,21 @@ function serializeTarget(
   };
 }
 
-/** Computes report-1 summary counts from results. */
+/** Computes report-1 summary counts from results; the status counts are over the selected ones. */
 function computeSummary(results: readonly ResultRecord[]): ReportSummary {
   let selected = 0;
   let executed = 0;
   let passed = 0;
   let failed = 0;
+  let interrupted = 0;
   let flaky = 0;
   let skipped = 0;
   for (const result of results) {
-    if (result.selected) selected += 1;
     if (result.attempts.length > 0 || (result.serialGroupId !== undefined && result.status !== 'skipped')) {
       executed += 1;
     }
+    if (!result.selected) continue;
+    selected += 1;
     switch (result.status) {
       case 'passed':
         passed += 1;
@@ -525,15 +555,17 @@ function computeSummary(results: readonly ResultRecord[]): ReportSummary {
         break;
       case 'failed':
       case 'timed-out':
-      case 'interrupted':
         failed += 1;
+        break;
+      case 'interrupted':
+        interrupted += 1;
         break;
       case 'skipped':
         skipped += 1;
         break;
     }
   }
-  return { discovered: results.length, selected, executed, passed, failed, flaky, skipped };
+  return { discovered: results.length, selected, executed, passed, failed, interrupted, flaky, skipped };
 }
 
 /**
@@ -543,7 +575,8 @@ function computeSummary(results: readonly ResultRecord[]): ReportSummary {
  * nothing contradicts that. One genuine failure keeps the run failed, and so
  * does any run-level error (a launch that never came up, a cleanup or report
  * write that failed): it is its own fact about the run, not a blocked step,
- * and it must stay visible to a host reading the status. Derivation requires
+ * and it must stay visible to a host reading the status. So does a skip after
+ * a failure under `failOnSkippedFailure`. Derivation requires
  * positive evidence, never absence of it.
  */
 function deriveRunStatus(
@@ -551,9 +584,11 @@ function deriveRunStatus(
   results: readonly ResultRecord[],
   serialGroups: readonly SerialGroupRecord[],
   runErrors: readonly RunError[],
+  failOnSkippedFailure: boolean,
 ): BuildReportOptions['status'] | 'blocked' {
   if (status !== 'failed' && status !== 'error') return status;
   if (runErrors.length > 0) return status;
+  if (failOnSkippedFailure && someSkippedAfterFailure(results, serialGroups)) return status;
   // Serial members carry no attempts of their own; their failing error lives
   // on the group's last attempt (or its failing member).
   const groupCode = new Map<string, string | undefined>();
@@ -688,7 +723,7 @@ export function buildReport(options: BuildReportOptions): Report1Document {
         name: 'e2e',
         version: packageVersion(import.meta.url, '../../package.json', '0.0.0'),
       },
-      status: deriveRunStatus(options.status, options.results, options.serialGroups, options.runErrors),
+      status: deriveRunStatus(options.status, options.results, options.serialGroups, options.runErrors, config?.failOnSkippedFailure === true),
       exitCode: options.exitCode,
       startedAt: options.startedAt,
       finishedAt: timestamp(),

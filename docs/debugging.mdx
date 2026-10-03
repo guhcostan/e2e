@@ -91,7 +91,9 @@ failed result:
 
 Artifacts land under `.e2e/artifacts/` (`<output>/artifacts/` when the
 [`output`](/reference/config#output) is moved), one directory per attempt.
-Each run empties it first, so it holds the latest run's evidence:
+Each run empties it first, so it holds the latest run's evidence. A
+`--last-failed` rerun instead empties it down to the files the report it
+reruns names, and writes its own under `rerun-<n>/`:
 
 - **Screenshots.** Failed attempts capture one whenever the engine can and
   pixels are allowed. The built-in `agent.assert` also captures one after
@@ -99,8 +101,9 @@ Each run empties it first, so it holds the latest run's evidence:
   be withheld. Use `app.screenshot('label')` to capture one explicitly.
 - **Playwright traces** on the attempts the [`trace`](/reference/config#trace)
   mode records: every attempt locally, the first retry in CI. Open one with
-  `npx playwright show-trace <file>`; `--trace off` skips the cost for one
-  run, `--trace` records every attempt of a CI run.
+  `npx playwright-core@1.63.0 show-trace <file>` (`pnpm dlx` under pnpm);
+  `--trace off` skips the cost for one run, `--trace` records every attempt
+  of a CI run.
 - **Downloads** saved through `browser.waitForDownload`, recorded with kind
   `download`. They are the app's bytes: `redaction: "incomplete"` unless a
   secret reached the session (filled, or held by the engine for basic auth)

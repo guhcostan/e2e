@@ -569,12 +569,43 @@ describe('ListReporter', () => {
       expect(lines.some((line) => line.includes('trace.zip'))).toBe(false);
     });
 
+    it('lists a retry that skipped with the failed attempt’s error and evidence', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(runStarted());
+      reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 1 }]));
+      const failed = failedAttempt('original failure');
+      failed.failure = { url: 'https://app.test/checkout', candidates: ['button "Pay later"'], screen: 'attempt-1:artifact:0' };
+      failed.artifacts = [
+        {
+          id: 'attempt-1:artifact:0',
+          kind: 'log',
+          mediaType: 'text/plain',
+          path: 'chromium/a/attempt-0/screen.txt',
+          redaction: 'complete',
+          producer: { kind: 'attempt' },
+        },
+      ];
+      const skipped = attempt({ id: 'attempt-2', index: 1, status: 'skipped' });
+      reporter.handle(finished({
+        ...result({ status: 'skipped', id: 'a', file: 'tests/a.e2e.ts', title: ['first'], attempts: [failed, skipped] }),
+        skip: { cause: 'explicit', reason: 'feature disabled' },
+      } as RunEventResult));
+      reporter.handle(runFinished({ status: 'passed', exitCode: 0, reportPath: '/project/.e2e/report.json' }));
+      expect(lines.join('\n')).toContain(' Skipped After Failure 1 ');
+      expect(lines).toContain(' SKIP  |chromium| tests/a.e2e.ts > first');
+      expect(lines).toContain('ASSERTION_FAILED: original failure');
+      expect(lines).toContain(' ❯ at https://app.test/checkout');
+      expect(lines).toContain(' ❯ on screen button "Pay later"');
+      expect(lines).toContain(' ❯ screen .e2e/artifacts/chromium/a/attempt-0/screen.txt');
+    });
+
     it('names the status when a failure recorded no error', () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
-      reporter.handle(finished(result({ status: 'interrupted', attempts: [attempt({ status: 'interrupted' })] })));
+      reporter.handle(finished(result({ status: 'timed-out', attempts: [attempt({ status: 'timed-out' })] })));
       reporter.handle(runFinished({ status: 'failed', exitCode: 1 }));
-      expect(lines).toContain('interrupted: no error was recorded');
+      expect(lines).toContain('timed-out: no error was recorded');
     });
   });
 
@@ -659,13 +690,30 @@ describe('ListReporter', () => {
   });
 
   describe('summary', () => {
-    it('counts timed-out and interrupted results as failures', () => {
+    it('counts timed-out results as failures and interrupted ones on their own', () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
       reporter.handle(finished(result({ status: 'timed-out', id: 'a' })));
-      reporter.handle(finished(result({ status: 'interrupted', id: 'b' })));
+      reporter.handle(finished(result({ status: 'interrupted', id: 'b', file: 'tests/b.e2e.ts' })));
       reporter.handle(runFinished({ status: 'failed', exitCode: 1, reportPath: '.e2e/report.json' }));
-      expect(lines).toContain('      Tests  2 failed | 0 passed (2)');
+      expect(lines).toContain(' Test Files  1 failed | 1 interrupted | 0 passed (2)');
+      expect(lines).toContain('      Tests  1 failed | 1 interrupted | 0 passed (2)');
+      expect(lines.filter((line) => line.includes('Failed Tests'))).toHaveLength(1);
+    });
+
+    it('lists an interrupted test under its file but not among the failures', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 2 }, { file: 'tests/b.e2e.ts', tests: 1 }]));
+      reporter.handle(finished(result({ status: 'passed', id: 'a', file: 'tests/a.e2e.ts', title: ['done'] })));
+      reporter.handle(finished(result({ status: 'interrupted', id: 'b', file: 'tests/a.e2e.ts', title: ['cut'] })));
+      reporter.handle(finished(result({ status: 'passed', id: 'c', file: 'tests/b.e2e.ts' })));
+      reporter.handle(runFinished({ status: 'interrupted', exitCode: 130, reportPath: '.e2e/report.json' }));
+      expect(lines).toContain(' ❯ |chromium| tests/a.e2e.ts (2 tests | 1 interrupted) 240ms');
+      expect(lines).toContain('   × cut (interrupted) 120ms');
+      expect(lines.join('\n')).not.toContain('Failed Tests');
+      expect(lines).toContain(' Test Files  1 interrupted | 1 passed (2)');
+      expect(lines).toContain('      Tests  1 interrupted | 2 passed (3)');
     });
 
     it('summarizes files, tests, and the report path relative to the project', () => {

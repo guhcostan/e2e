@@ -1,8 +1,9 @@
 import { assert, describe, expect, it, vi } from 'vitest';
 import type { Observation, SemanticNode } from '../../src/engine/surface.ts';
-import { changeShape, interactiveNodeCount, isTransitionalObservation, observationShape, prepareObservation, projectTree, settleObservation } from '../../src/agent/observation.ts';
+import { changeShape, interactiveNodeCount, isTransitionalObservation, observationShape, prepareObservation, projectTree, redactNode, redactNodesAgain, settleObservation } from '../../src/agent/observation.ts';
 import { OBSERVED_NAME_LIMIT, OBSERVED_TEXT_LIMIT } from '../../src/engine/contract.ts';
 import { SecretLedger } from '../../src/internal/redact.ts';
+import { describeDelta } from '../../src/cache/anchors.ts';
 
 function node(id: string, extra: Partial<SemanticNode> = {}): SemanticNode {
   return { ref: { id, revision: 'r1' }, ...extra };
@@ -173,9 +174,91 @@ describe('prepareObservation', () => {
     expect(prepared.nodes.get('n5')?.text).toBe(cutText('plain-control-plain'));
     // A field under its limit was not cut, so a fragment inside it is only app text.
     expect(prepared.nodes.get('n6')?.text).toBe(`whole ${secret.slice(0, 20)}`);
-    expect(prepared.nodes.get('n6')).toBe(tree.children?.[4]);
+    expect(prepared.nodes.get('n6')).toEqual(tree.children?.[4]);
     // A value longer than the limit is a native control's, which no engine cuts.
-    expect(prepared.nodes.get('n7')).toBe(tree.children?.[5]);
+    expect(prepared.nodes.get('n7')).toEqual(tree.children?.[5]);
+  });
+
+  it('redacts every string field a node carries, in the text, the executor tree, and the node index alike', () => {
+    const secret = 'field-secret-Kq7ZrT2mWx9pLd4sNv8bHc3jFg6y';
+    const ledger = new SecretLedger([['probe', secret]]);
+    const tree = node('n1', {
+      role: 'document',
+      children: [
+        node('n2', { role: 'button', name: 'Go', testId: secret, selector: `[data-testid="${secret}"]`, attributes: { [`data-${secret}`]: secret, placeholder: secret } }),
+        node('n3', { role: secret, name: 'Custom' }),
+        node('n4', { role: 'iframe', name: 'Frame', children: [node('n5', { role: 'button', name: 'Inner', framePath: [`iframe[name="${secret}"]`] })] }),
+        { ...node('n6', { role: 'status', name: 'Extra' }), extra: secret } as SemanticNode,
+      ],
+    });
+    const prepared = prepareObservation(observation(tree), { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 16_384 });
+    assert(prepared.kind === 'semantic');
+    expect(prepared.text).toContain('testid="<secret:probe>"');
+    expect(prepared.nodes.get('n5')?.framePath).toEqual(['iframe[name="<secret:probe>"]']);
+    expect(prepared.nodes.get('n2')?.selector).toBe('[data-testid="<secret:probe>"]');
+    expect(prepared.nodes.get('n2')?.attributes).toEqual({ 'data-<secret:probe>': '<secret:probe>', placeholder: '<secret:probe>' });
+    expect(prepared.nodes.get('n3')?.role).toBe('<secret:probe>');
+    expect(prepared.nodes.get('n6')).toEqual(node('n6', { role: 'status', name: 'Extra' }));
+    for (const shown of [prepared.text, JSON.stringify(projectTree(prepared.tree)), JSON.stringify([...prepared.nodes.values()])]) {
+      expect(shown).not.toContain(secret);
+      expect(shown).not.toContain(secret.slice(0, 12));
+    }
+  });
+
+  describe.each([
+    ['letters with a line break', 'leadqzrtmwxplkdsnvbhcjfg', '\n', 'tailyqaeuoirktywzxnumbvcxzlkjhgfdsapoiuytrewqmnbvcxzlkj'],
+    ['hex with a line break', '0f3a9c71e4b2d85601aa7c3e', '\n', '9b84f0c2d17e6a35b9f04c8d2e71a6b3c95d08f4e2a7b61c3d9e0f5'],
+    ['letters with a tab', 'leadqzrtmwxplkdsnvbhcjfg', '\t', 'tailyqaeuoirktywzxnumbvcxzlkjhgfdsapoiuytrewqmnbvcxzlkj'],
+    ['letters with a CRLF', 'leadqzrtmwxplkdsnvbhcjfg', '\r\n', 'tailyqaeuoirktywzxnumbvcxzlkjhgfdsapoiuytrewqmnbvcxzlkj'],
+    ['letters with a no-break space', 'leadqzrtmwxplkdsnvbhcjfg', ' ', 'tailyqaeuoirktywzxnumbvcxzlkjhgfdsapoiuytrewqmnbvcxzlkj'],
+    ['letters with repeated spaces', 'leadqzrtmwxplkdsnvbhcjfg', '   ', 'tailyqaeuoirktywzxnumbvcxzlkjhgfdsapoiuytrewqmnbvcxzlkj'],
+  ])('a secret of %s an engine collapsed, then cut at the name and text limits', (_kind, lead, separator, tail) => {
+    const ledger = new SecretLedger([['multi', `${lead}${separator}${tail}`]]);
+    const collapsed = `${lead} ${tail}`;
+    const cut = (limit: number, kept: number): string => `${'x'.repeat(limit - kept - 1)} ${collapsed.slice(0, kept)}`;
+    const fragments = [lead, lead.slice(0, 8), collapsed.slice(0, 30), tail.slice(0, 8)];
+
+    it.each([
+      ['in the second part', lead.length + 15],
+      ['on the collapsed space', lead.length + 1],
+      ['in the first part', 10],
+    ])('keeps no part of it when the cut falls %s, in the text, the tree, or the anchors', (_where, kept) => {
+      const tree = node('n1', {
+        role: 'document',
+        children: [node('n2', { role: 'heading', name: cut(OBSERVED_NAME_LIMIT, kept) }), node('n3', { text: cut(OBSERVED_TEXT_LIMIT, kept) })],
+      });
+      expect(cut(OBSERVED_NAME_LIMIT, kept)).toHaveLength(OBSERVED_NAME_LIMIT);
+      const prepared = prepareObservation(observation(tree), { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 16_384 });
+      assert(prepared.kind === 'semantic');
+      const anchors = describeDelta(new Map(), prepared.nodes, false).appeared;
+      expect(anchors.map((anchor) => anchor.name ?? anchor.text).join(' ')).toContain('<secret:multi>');
+      for (const shown of [prepared.text, JSON.stringify(projectTree(prepared.tree)), JSON.stringify(anchors)]) {
+        expect(shown).toContain('<secret:multi>');
+        for (const fragment of fragments) expect(shown).not.toContain(fragment);
+      }
+    });
+  });
+
+  it('collapses a field whose collapsed form shows a secret its written form hides, so no later reader brings it back', () => {
+    const ledger = new SecretLedger([['phrase', 'correct horse battery staple']]);
+    const tree = node('n1', { children: [node('n2', { role: 'heading', name: 'say correct\n\n  horse battery   staple now', testId: 'correct\t\thorse battery staple' })] });
+    const prepared = prepareObservation(observation(tree), { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 4_096 });
+    assert(prepared.kind === 'semantic');
+    expect(prepared.nodes.get('n2')).toMatchObject({ name: 'say <secret:phrase> now', testId: '<secret:phrase>' });
+    expect(JSON.stringify(describeDelta(new Map(), prepared.nodes, false).appeared)).not.toContain('horse');
+  });
+
+  it('redacts an earlier capture again with a secret resolved since, keeping which nodes are leaves', () => {
+    const tree = node('n1', { role: 'list', children: [node('n2', { role: 'listitem', name: 'tok_9f8e7d6c5b4a3210', children: [node('n3', { text: 'tok_9f8e7d6c5b4a3210' })] })] });
+    const before = new SecretLedger([]);
+    const prepared = prepareObservation(observation(tree), { redact: before.redact, redactCut: before.redactCut, maxBytes: 4_096 });
+    assert(prepared.kind === 'semantic');
+    const after = new SecretLedger([['token', 'tok_9f8e7d6c5b4a3210']]);
+    const again = redactNodesAgain(prepared.nodes, { redact: after.redact, redactCut: after.redactCut });
+    expect(JSON.stringify([...again.values()])).not.toContain('tok_9f8e7d6c5b4a3210');
+    expect(again.get('n2')).toMatchObject({ name: '<secret:token>', children: [{ text: '<secret:token>' }] });
+    expect(again.get('n2')?.children?.[0]).toBe(again.get('n3'));
+    expect(again.get('n3')?.children).toBeUndefined();
   });
 
   it('truncates at the byte limit while keeping the root and flagging truncation', () => {
@@ -316,7 +399,7 @@ describe('disambiguating attributes', () => {
     const tree = node('n1', { role: 'link', name: 'Emoji', attributes: { href } });
     const text = prepareObservation(observation(tree), { redact: NO_REDACT, redactCut: NO_REDACT, maxBytes: 4_096 }).text;
     expect(text).toBe(`#n1 link "Emoji" href="${href.slice(0, 255)}…"`);
-    expect(projectTree(tree, NO_REDACT).attributes).toEqual({ href: `${href.slice(0, 255)}…` });
+    expect(projectTree(redactNode(tree, { redact: NO_REDACT, redactCut: NO_REDACT })).attributes).toEqual({ href: `${href.slice(0, 255)}…` });
   });
 
   it('gives an executor tree an app link absolute, cut no shorter than the line cuts its path', () => {
@@ -328,7 +411,7 @@ describe('disambiguating attributes', () => {
         node('n3', { role: 'link', name: 'Long', attributes: { href: `https://app.test${long}` } }),
       ],
     });
-    const hrefs = projectTree(tree, NO_REDACT, 'https://app.test').children?.map((child) => child.attributes?.['href']);
+    const hrefs = projectTree(redactNode(tree, { redact: NO_REDACT, redactCut: NO_REDACT }), 'https://app.test').children?.map((child) => child.attributes?.['href']);
     expect(hrefs).toEqual([`https://app.test${path}`, `https://app.test${long.slice(0, 256)}…`]);
   });
 
@@ -388,7 +471,7 @@ describe('disambiguating attributes', () => {
     expect(prepared.nodes.get('n2')?.selection).toBeUndefined();
     expect(prepared.nodes.get('n4')?.selection).toBeUndefined();
     expect(prepared.nodes.get('n3')?.selection).toBe('approved');
-    expect(JSON.stringify(projectTree(prepared.tree, ledger.redact))).not.toContain(fragment);
+    expect(JSON.stringify(projectTree(prepared.tree))).not.toContain(fragment);
   });
 
   it('withholds the selection of a field cut at its limit that may hold a secret the cut hides', () => {
@@ -488,7 +571,7 @@ describe('observationShape', () => {
 });
 
 describe('projectTree', () => {
-  it('redacts names, text, values, selections, and attributes, and drops secure values, secure selections, and selectors', () => {
+  it('renders a redacted tree: names, text, values, and attributes redacted, no secure value, no selection a secret may show, no selector', () => {
     const redact = (text: string): string => text.replaceAll('hunter2', '<password>');
     const tree = node('root', {
       role: 'document',
@@ -511,13 +594,13 @@ describe('projectTree', () => {
         }),
       ],
     });
-    const projected = projectTree(tree, redact);
+    const projected = projectTree(redactNode(tree, { redact, redactCut: redact }));
     expect(projected).toEqual({
       id: 'root',
       role: 'document',
       children: [
         { id: 'n1', role: 'textbox', name: 'Password', states: { secure: true, focused: true } },
-        { id: 'n3', role: 'textbox', value: '<password> stays', selection: '<password>' },
+        { id: 'n3', role: 'textbox', value: '<password> stays' },
         {
           id: 'n2',
           role: 'link',

@@ -65,6 +65,7 @@ export interface ResolvedConfig {
   readonly assertionTimeout: number;
   readonly cleanupTimeout: number;
   readonly retries: number;
+  readonly failOnSkippedFailure: boolean;
   readonly workers: number;
   /** Host store every produced artifact is handed to; undefined keeps files local only. */
   readonly artifactStore: ArtifactStore | undefined;
@@ -154,6 +155,7 @@ const TOP_LEVEL_KEYS = new Set([
   'assertionTimeout',
   'cleanupTimeout',
   'retries',
+  'failOnSkippedFailure',
   'workers',
   'artifacts',
   'output',
@@ -266,6 +268,11 @@ export function resolveConfig(
     boundedInt(raw.workers, 'workers', 1, 1024) ??
     (ci ? 1 : Math.max(1, Math.floor(os.availableParallelism() / 2)));
 
+  const failOnSkippedFailure = raw.failOnSkippedFailure === undefined ? false : raw.failOnSkippedFailure;
+  if (typeof failOnSkippedFailure !== 'boolean') {
+    throw new ConfigurationError('INVALID_CONFIG', 'failOnSkippedFailure must be a boolean');
+  }
+
   const artifactStore = resolveArtifactStore(raw);
   const { reporters, customReporters } = resolveReporters(raw, cli);
 
@@ -291,6 +298,7 @@ export function resolveConfig(
     assertionTimeout,
     cleanupTimeout,
     retries,
+    failOnSkippedFailure,
     workers,
     artifactStore,
     output,
@@ -761,6 +769,8 @@ function resolveSecrets(
   const credentials = new Map<string, ResolvedCredential>();
   const secrets = new Map<string, ResolvedSecret>();
   const allSecrets = new Map<string, ResolvedSecret>();
+  checkEnvNameCollisions('E2E_USER', 'credentials', Object.keys(raw.credentials ?? {}));
+  checkEnvNameCollisions('E2E_SECRET', 'secrets', Object.keys(raw.secrets ?? {}));
   for (const [name, credential] of Object.entries(raw.credentials ?? {})) {
     const prefix = envName('E2E_USER', name);
     const username = env[`${prefix}_USERNAME`] ?? credential.username;
@@ -791,6 +801,32 @@ function resolveSecrets(
     allSecrets.set(name, secret);
   }
   return { credentials, secrets, allSecrets };
+}
+
+/**
+ * Two entries of one namespace whose names map to the same override variable
+ * (`api-key` and `api_key` both read `E2E_SECRET_API_KEY`) would both take one
+ * rotated value, so the config load refuses them, whether or not the variable
+ * is set. The message names the entries and the variable, never a value.
+ */
+function checkEnvNameCollisions(prefix: 'E2E_USER' | 'E2E_SECRET', namespace: string, names: readonly string[]): void {
+  const byEnvName = new Map<string, string[]>();
+  for (const name of names) {
+    const variable = envName(prefix, name);
+    byEnvName.set(variable, [...(byEnvName.get(variable) ?? []), name]);
+  }
+  for (const [variable, group] of byEnvName) {
+    if (group.length < 2) continue;
+    const quoted = group.map((name) => `"${name}"`);
+    const entries = `${quoted.slice(0, -1).join(', ')} and ${quoted.at(-1)!}`;
+    const variables = prefix === 'E2E_USER'
+      ? `the override variables ${variable}_USERNAME and ${variable}_PASSWORD`
+      : `the override variable ${variable}`;
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${namespace} ${entries} share ${variables}, so one value set there would replace all of them; rename all but one`,
+    );
+  }
 }
 
 /**
@@ -900,9 +936,11 @@ function computeConfigDigest(
   // reporter object changes nothing about what a run records, so it never
   // enters the digest either; the built-in ids digest as they always have,
   // so adding a reporter to a config leaves its cache valid.
+  // `failOnSkippedFailure` decides only the exit code, never what runs.
   // `targets` digest by declaration below and never enter the clone: an
   // engine holds `secrets.get()` handles, which refuse to serialize.
   const {
+    failOnSkippedFailure: _failOnSkippedFailure,
     artifacts: _artifacts,
     output: _output,
     trace: _trace,

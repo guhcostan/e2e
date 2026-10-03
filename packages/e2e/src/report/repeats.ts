@@ -17,7 +17,15 @@ export interface RepeatGroup {
   readonly runs: readonly RepeatRun[];
   /** Runs that passed on their first attempt; a flaky run needed a retry and does not count. */
   readonly passed: number;
+  /**
+   * Whether a run that reached a verdict did not pass: a flake. A run the
+   * run interrupted, or never started, says nothing about the test.
+   */
+  readonly unstable: boolean;
 }
+
+/** Statuses of a run that reached no verdict: stopped by the run, or never started. */
+const UNDECIDED = new Set(['interrupted', 'skipped']);
 
 /**
  * Groups runs by `key`, keeping only tests that ran more than once and did
@@ -38,7 +46,12 @@ export function repeatGroups<T>(
     .filter((group) => group.runs.length > 1 && group.runs.some((run) => run.status !== 'skipped'))
     .map((group) => {
       const runs = group.runs.toSorted((a, b) => a.repeat - b.repeat);
-      return { label: group.label, runs, passed: runs.filter((run) => run.status === 'passed').length };
+      return {
+        label: group.label,
+        runs,
+        passed: runs.filter((run) => run.status === 'passed').length,
+        unstable: runs.some((run) => run.status !== 'passed' && !UNDECIDED.has(run.status)),
+      };
     });
 }
 
@@ -49,13 +62,14 @@ export function repeatSummary(groups: readonly RepeatGroup[]): string {
   return `${stable} of ${groups.length} test${groups.length === 1 ? '' : 's'} passed all ${runs} runs`;
 }
 
-/** A run that did not pass, in a word: its error code, or `flaky` with the code its retry recovered from. */
+/** A run that did not pass, in a word: its error code, `flaky` with the code its retry recovered from, or why it reached no verdict. */
 function outcomeOf(run: RepeatRun): string {
   if (run.status === 'flaky') return run.code === undefined ? 'flaky' : `flaky (${run.code})`;
+  if (UNDECIDED.has(run.status)) return run.status;
   return run.code ?? run.status;
 }
 
-/** `3/5 passed · repeat 0 ASSERTION_FAILED · repeat 2 flaky`, naming each run that did not pass. */
+/** `3/5 passed · repeat 0 ASSERTION_FAILED · repeat 2 flaky · repeat 4 interrupted`, naming each run that did not pass. */
 export function repeatLine(group: RepeatGroup): string {
   const misses = group.runs
     .filter((run) => run.status !== 'passed')

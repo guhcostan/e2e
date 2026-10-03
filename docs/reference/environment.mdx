@@ -21,6 +21,7 @@ See [Models](/models) and [Subscriptions](/subscriptions).
 | Variable | Reading | Effect |
 | --- | --- | --- |
 | `E2E_OAUTH_CREDENTIALS` | value | The stored subscription logins as JSON, the contents of `oauth.json`, for a machine nobody can sign in on. The `e2e/oauth/*` models and `e2e models` read it in place of `$XDG_CONFIG_HOME/e2e/oauth.json`; `e2e login` and `e2e logout` refuse to change it, and refreshed tokens are not written back |
+| `OPENCODE_API_KEY` | value | An OpenCode Console service account key; `opencodeConsole()` uses it in place of the stored `opencode-console` login; `e2e models` still reads the stored login. OpenCode reads the same variable |
 | `XDG_CONFIG_HOME` | value | Directory of the stored logins, `$XDG_CONFIG_HOME/e2e/oauth.json`; default `~/.config/e2e/oauth.json` |
 
 ## Credentials and secrets
@@ -32,7 +33,13 @@ See [Models](/models) and [Subscriptions](/subscriptions).
 | `E2E_SECRET_<NAME>` | set | Replaces the value of `secrets.<name>` |
 
 `<NAME>` is the name uppercased with every character outside `A-Z0-9`
-replaced by `_`, so `power-user` becomes `E2E_USER_POWER_USER_USERNAME`. A
+replaced by `_`, so `power-user` becomes `E2E_USER_POWER_USER_USERNAME`. Two
+credentials, or two secrets, whose names map to the same `<NAME>` (`api-key`
+and `api_key` both read `E2E_SECRET_API_KEY`; `svc-a` and `svc_a` both read
+`E2E_USER_SVC_A_USERNAME` and `_PASSWORD`) are `INVALID_CONFIG` at config
+load, whether or not a variable is set, so one rotation never replaces two
+entries; the message names the entries and the variables. A credential and a
+secret may share a name, since their prefixes differ. A
 variable for a name absent from the config is ignored. An empty value is
 `INVALID_CONFIG`, and so is a password or secret shorter than 6 characters
 (code points): redaction rewrites every occurrence of a value, and one that

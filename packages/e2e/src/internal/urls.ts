@@ -110,13 +110,18 @@ export function isImplicitTestHost(hostname: string): boolean {
   return isLoopbackHost(hostname) || hostname.endsWith('.test');
 }
 
-const FORBIDDEN_PROTOCOLS = new Set(['file:', 'data:', 'javascript:']);
+const NAVIGABLE_PROTOCOLS = new Set(['http:', 'https:']);
+
+/** The one non-http(s) page navigation opens: empty, with no local or inline content. */
+const BLANK_PAGE = 'about:blank';
 
 /**
- * Resolves a navigation URL against the base and refuses the schemes no test
- * may open. Returns the absolute URL string. Any http(s) origin is admitted:
- * a click can reach one just as well, so a gate on typed navigation alone
- * would guard nothing.
+ * Resolves a navigation URL against the base and refuses every scheme but
+ * http(s), except the exact `about:blank`. Returns the absolute URL string.
+ * Any http(s) origin is admitted: a click can reach one just as well, so a
+ * gate on typed navigation alone would guard nothing. The rule is an
+ * allowlist because a browser wraps and nests schemes (`view-source:file:`,
+ * `blob:`, `filesystem:`), and a list of forbidden ones misses the wrapper.
  */
 export function resolveNavigationUrl(input: string, base: NormalizedBaseUrl | undefined): { url: string } {
   let url: URL;
@@ -133,7 +138,7 @@ export function resolveNavigationUrl(input: string, base: NormalizedBaseUrl | un
     }
     throw new ConfigurationError('POLICY_DENIED', `malformed URL: ${input}`);
   }
-  if (FORBIDDEN_PROTOCOLS.has(url.protocol)) {
+  if (!NAVIGABLE_PROTOCOLS.has(url.protocol) && url.href !== BLANK_PAGE) {
     throw new ConfigurationError('POLICY_DENIED', `forbidden URL scheme: ${url.protocol}`);
   }
   return { url: url.href };

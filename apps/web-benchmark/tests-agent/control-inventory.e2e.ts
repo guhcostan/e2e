@@ -1,6 +1,6 @@
 /**
  * The agent verbs the hard scenarios never reach, each on the plain control
- * built for it: check, the long press and the double click, a context menu
+ * built for it: check, on a radio the pick replaces too, the long press and the double click, a context menu
  * that opens on right-click only, a file input, the browser history, a scroll
  * into view. One step per verb, so a red test names the verb, and a locator
  * check pins each outcome the way the deterministic twin reads it.
@@ -19,6 +19,11 @@ test.describe('control inventory', () => {
   test('check sets the checkbox and the radio', TAGS, async ({ agent, screen }) => {
     await agent.act('agree to the terms and pick the Medium size');
     await expect(screen.getByLabel('Toggles state')).toHaveText('terms agreed, size Medium');
+  });
+
+  test('check picks a radio the pick replaces with its summary', TAGS, async ({ agent, screen }) => {
+    await agent.act('pick Express delivery');
+    await expect(screen.getByLabel('Delivery state')).toHaveText('Express');
   });
 
   test('a long press and a double click are chosen over a plain tap', TAGS, async ({ agent, screen }) => {

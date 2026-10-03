@@ -92,7 +92,7 @@ describe('agent tool pack', () => {
         messages: [],
       });
     const before = fake.calls.length;
-    for (const denied of ['file:///etc/passwd', 'data:text/html,hi', 'javascript:alert(1)']) {
+    for (const denied of ['file:///etc/passwd', 'data:text/html,hi', 'javascript:alert(1)', 'view-source:file:///etc/passwd']) {
       await expect(open(denied)).rejects.toMatchObject({ code: 'POLICY_DENIED' });
     }
     for (const link of ['https://example.com/verify', 'myapp://orders/42']) {

@@ -5,13 +5,15 @@
  *
  * The runner's own rule (`resolveNavigationUrl`, reached by a fixture as
  * `context.app.resolveUrl`) first demands an app URL, which a device engine
- * never declares, so the same small check lives here rather than behind a
- * gate that would refuse every link.
+ * never declares, and admits http(s) alone, where a device link is any app's
+ * custom scheme. So the check here is a list of refused schemes: the ones
+ * that read local content or inline a document, and the browser wrappers
+ * (`view-source:file:...`, `blob:`, `filesystem:`) that carry one inside.
  */
 
 import { ConfigurationError, TestError } from 'e2e/engine';
 
-const FORBIDDEN_PROTOCOLS = new Set(['file:', 'data:', 'javascript:']);
+const FORBIDDEN_PROTOCOLS = new Set(['file:', 'data:', 'javascript:', 'view-source:', 'blob:', 'filesystem:']);
 
 /**
  * What agent-device opens as a URL instead of resolving as an app: a
@@ -34,8 +36,11 @@ function denyForbiddenScheme(protocol: string): void {
 
 /**
  * Parses a link a test asked to open. A string that is not an absolute URL
- * is `INVALID_ARGUMENT`; a `file:`, `data:`, or `javascript:` link is
- * `POLICY_DENIED`, as it is for `app.open` on the web.
+ * is `INVALID_ARGUMENT`; a `file:`, `data:`, `javascript:`, `view-source:`,
+ * `blob:`, or `filesystem:` link is `POLICY_DENIED`, as it is for `app.open`
+ * on the web. The message never echoes the input: a malformed link can carry
+ * a magic-link token in its query, path, or userinfo, and nothing about a
+ * string that failed to parse says which part is safe to repeat.
  */
 export function linkTarget(input: string): URL {
   let url: URL;
@@ -44,7 +49,7 @@ export function linkTarget(input: string): URL {
   } catch {
     throw new TestError(
       'INVALID_ARGUMENT',
-      `openLink needs an absolute URL such as myapp://orders/42 or https://example.com/verify, got "${input}"`,
+      'openLink needs an absolute URL such as myapp://orders/42 or https://example.com/verify',
     );
   }
   denyForbiddenScheme(url.protocol);
@@ -54,8 +59,8 @@ export function linkTarget(input: string): URL {
 /**
  * Refuses a link handed to `openApp`, which opens an app by bundle id,
  * package, or display name. agent-device opens any `scheme:rest` string as
- * a URL, so the check runs before the device sees it: a `file:`, `data:`,
- * or `javascript:` link is `POLICY_DENIED` as it is for `openLink`, any
+ * a URL, so the check runs before the device sees it: a link with a
+ * forbidden scheme is `POLICY_DENIED` as it is for `openLink`, any
  * other link is `INVALID_ARGUMENT` pointing at `openLink`. The message
  * never echoes the link, whose query may carry a magic-link token.
  */

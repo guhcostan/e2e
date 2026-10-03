@@ -21,7 +21,9 @@ export function isRetryEligible(attempt: RetryAttempt): boolean {
  * Runs up to `maxAttempts` attempts, stopping on pass, interrupt, or a
  * failure that does not consume retry budget. `runOnce` returns the
  * finished attempt, or undefined when the attempt could not start (the
- * loop stops and the last observed status stands).
+ * loop stops and the last observed status stands). An interrupt during a
+ * retry keeps the verdict the failed attempt before it reached: the test
+ * did fail, and only its second chance was cut short.
  */
 export async function runWithRetries(
   maxAttempts: number,
@@ -36,7 +38,7 @@ export async function runWithRetries(
     if (attempt === undefined) break;
     attemptCount += 1;
     if (attempt.status === 'passed') return attemptCount > 1 ? 'flaky' : 'passed';
-    if (attempt.status === 'interrupted') return 'interrupted';
+    if (attempt.status === 'interrupted') return attemptCount > 1 ? finalStatus : 'interrupted';
     // A body that skipped itself has decided; a retry would only ask again.
     if (attempt.status === 'skipped') return 'skipped';
     finalStatus = attempt.status;

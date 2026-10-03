@@ -25,17 +25,19 @@ import { timestamp, uuidv7 } from '../internal/ids.ts';
 import { engineAppInfo } from '../config/app.ts';
 import { Deadline, NEVER_ABORTS, withAbort, withScopedBudget, withTimeout } from '../internal/time.ts';
 import { createAgentCacheContext, flushStagedTraces } from '../cache/context.ts';
+import { storedRecordingsFor, type StoredRecordings } from '../cache/rekeyed.ts';
 import type { ModuleRegistration, RegisteredTest } from '../collect/registry.ts';
 import { pairRecordings, type TestTargetPair } from '../collect/select.ts';
 import type { AttemptRecording, AttemptRecordings, RecordingKind } from '../internal/recording-modes.ts';
 import type { ArtifactStore, Secret } from '../types.ts';
-import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
+import { attemptSegments, createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { createEngineSession } from '../engine/session.ts';
 import { createExtendedFixtures } from './extended-fixtures.ts';
 import { captureFailureEvidence } from './failure-evidence.ts';
 import { createFixtures, type ArtifactSink } from './fixtures.ts';
 import { publishAttempt } from '../expect/attempt.ts';
+import { PollScope, runInPollScope } from '../expect/poll-scope.ts';
 import { SoftFailures } from '../expect/soft.ts';
 import { findRegistered, RealmManager, runHook, type FileRef, type Realm } from './realm.ts';
 import type {
@@ -81,6 +83,12 @@ export interface TargetExecutorOptions {
   readonly target: ResolvedTarget;
   readonly runId: string;
   readonly artifactsRoot: string;
+  /**
+   * The directory under `artifactsRoot` a `--last-failed` rerun's attempts
+   * write in (`claimRerunDir`), beside the evidence of the run it reruns;
+   * undefined when the attempts fill the root themselves.
+   */
+  readonly rerunDir?: string | undefined;
   readonly sessionStore: SessionStore;
   readonly headed: boolean;
   /** This worker's slot among the target's workers; see `EngineInitInfo.workerSlot`. */
@@ -156,6 +164,7 @@ export class TargetExecutor implements SerialHost {
     return this.config.artifactStore;
   }
   readonly artifactsRoot: string;
+  readonly rerunDir: string | undefined;
   readonly interruptSignal: AbortSignal;
   readonly realms: RealmManager;
   readonly debug: DebugTrace;
@@ -167,12 +176,15 @@ export class TargetExecutor implements SerialHost {
   private lastAttemptTestId: string | undefined;
   private readonly models: WorkerModels;
   private readonly sessionIdentity: SessionIdentity;
+  /** The file store's listing under `cache.strict`, read once for every attempt here. */
+  private readonly storedRecordings: StoredRecordings | undefined;
   /** Resolves once the engine's init hook completed for this worker. */
   private engineReady: Promise<void> | undefined;
 
   constructor(private readonly options: TargetExecutorOptions) {
     this.target = options.target;
     this.artifactsRoot = options.artifactsRoot;
+    this.rerunDir = options.rerunDir;
     this.interruptSignal = options.interruptSignal;
     this.debug = options.debug ?? new DebugTrace(false);
     this.models = new WorkerModels((error) => {
@@ -188,6 +200,7 @@ export class TargetExecutor implements SerialHost {
       debug: this.debug,
     });
     this.sessionIdentity = targetIdentity(options.target);
+    this.storedRecordings = storedRecordingsFor(options.config.cache);
   }
 
   private get config(): ResolvedConfig {
@@ -850,7 +863,13 @@ export class TargetExecutor implements SerialHost {
       // several times, from overwriting itself.
       segments:
         shared?.artifactSegments ??
-        [this.target.name, sanitizePathSegment(registered.artifactName ?? pair.test.id), pair.agent, ...repeatSegment(pair.repeat), `attempt-${attemptIndex}`],
+        attemptSegments(this.rerunDir, [
+          this.target.name,
+          sanitizePathSegment(registered.artifactName ?? pair.test.id),
+          pair.agent,
+          ...repeatSegment(pair.repeat),
+          `attempt-${attemptIndex}`,
+        ]),
       attemptId,
       currentStepId: () => steps.currentStepId,
       ...(this.config.artifactStore === undefined ? {} : { store: this.config.artifactStore }),
@@ -878,6 +897,8 @@ export class TargetExecutor implements SerialHost {
     let skipped: RuntimeSkip | undefined;
     let phase: AttemptPhase = 'launch';
     let timedOut = false;
+    // The polls the fixtures, the beforeEach hooks, and the body start.
+    const bodyPolls = new PollScope('the test body');
     // Captured the moment the primary failure lands: steps that pass later —
     // afterEach cleanup, teardown — must not confirm traces the failure
     // implicated (a cleanup assertion says nothing about the failed flow).
@@ -928,6 +949,7 @@ export class TargetExecutor implements SerialHost {
             testId: pair.test.id,
             target: this.sessionIdentity,
             attemptIndex,
+            recordings: this.storedRecordings,
           })
         : undefined;
 
@@ -1009,24 +1031,28 @@ export class TargetExecutor implements SerialHost {
       );
 
       /**
-       * Steps the body left running when it settled were not awaited. Each
-       * is recorded as failed at its call, cancelled through the attempt
-       * signal the way a timeout cancels the body, and waited for within one
-       * cleanup budget, so teardown starts on a quiet session. Left alone,
-       * such a step would fail once the session closed with nobody to catch
-       * it and take the worker down.
+       * Steps and polls the body left running when it settled were not
+       * awaited. A step is recorded as failed at its call, cancelled through
+       * the attempt signal the way a timeout cancels the body, and waited for
+       * within one cleanup budget, so teardown starts on a quiet session.
+       * Left alone, such a step would fail once the session closed with
+       * nobody to catch it and take the worker down. A poll is cancelled
+       * alone; left alone, its timeout would fail whatever ran then.
+       * Returns their errors, steps first.
        */
-      const abandonNotAwaited = async (): Promise<TestError | undefined> => {
-        if (attemptEnd.signal.aborted) return undefined;
-        const notAwaited = steps.abandonRunning();
-        if (notAwaited === undefined) return undefined;
-        attemptAbort.abort();
-        await withTimeout(
-          steps.settleAbandoned(),
-          this.config.cleanupTimeout,
-          () => new Error('abandoned steps did not settle'),
-        ).catch(() => undefined);
-        return notAwaited;
+      const abandonNotAwaited = async (): Promise<TestError[]> => {
+        if (attemptEnd.signal.aborted) return [];
+        const pollsNotAwaited = bodyPolls.close();
+        const stepsNotAwaited = steps.abandonRunning();
+        if (stepsNotAwaited !== undefined) {
+          attemptAbort.abort();
+          await withTimeout(
+            steps.settleAbandoned(),
+            this.config.cleanupTimeout,
+            () => new Error('abandoned steps did not settle'),
+          ).catch(() => undefined);
+        }
+        return [stepsNotAwaited, pollsNotAwaited].filter((error) => error !== undefined);
       };
       const mainWork = async (): Promise<void> => {
         try {
@@ -1039,19 +1065,22 @@ export class TargetExecutor implements SerialHost {
           await (registered.fn as SetupFn)(fixtures);
         } catch (cause) {
           // The body's own failure stays the verdict; the step it abandoned
-          // and the soft failures it kept are noted beside it.
+          // and the soft failures it kept are noted beside it. A skip keeps
+          // only the soft failures: a step or poll it left running is not one.
           const notAwaited = await abandonNotAwaited();
           const softFailure = soft.close();
-          if (!isRuntimeSkip(cause)) {
-            for (const secondary of [notAwaited, softFailure]) {
-              if (secondary !== undefined) {
-                secondaryErrors.push(serializeError(secondary, { phase: 'body', projectRoot: this.config.projectRoot, redact }));
-              }
+          const kept = isRuntimeSkip(cause) ? [softFailure] : [...notAwaited, softFailure];
+          for (const secondary of kept) {
+            if (secondary !== undefined) {
+              secondaryErrors.push(serializeError(secondary, { phase: 'body', projectRoot: this.config.projectRoot, redact }));
             }
           }
           throw cause;
         }
-        const notAwaited = await abandonNotAwaited();
+        const [notAwaited, ...moreNotAwaited] = await abandonNotAwaited();
+        for (const secondary of moreNotAwaited) {
+          secondaryErrors.push(serializeError(secondary, { phase: 'body', projectRoot: this.config.projectRoot, redact }));
+        }
         if (notAwaited !== undefined) throw notAwaited;
         // Soft failures fail the attempt once the body has settled, before
         // `afterEach`; a soft matcher in a hook finds collection closed and throws.
@@ -1067,11 +1096,11 @@ export class TargetExecutor implements SerialHost {
       // moves to cleanup.
       const work = this.options.isolated
         ? withAbort(
-            mainWork(),
+            runInPollScope(bodyPolls, mainWork),
             this.interruptSignal,
             () => new E2EError('interrupted', 'INTERRUPTED', `run interrupted in phase ${phase}`),
           )
-        : mainWork();
+        : runInPollScope(bodyPolls, mainWork);
       const body = Promise.race([
         work,
         new Promise<never>((_, reject) => {
@@ -1096,6 +1125,8 @@ export class TargetExecutor implements SerialHost {
         // The race has settled: a rejection surfacing while the evidence is
         // captured is recorded, not aimed at it.
         cutBody = undefined;
+        // A body cut short may have been awaiting its polls; they end with it.
+        bodyPolls.close();
         // `skipRunningTest` has already refused the cases that may not skip.
         if (isRuntimeSkip(cause)) skipped = cause;
         else {
@@ -1155,6 +1186,7 @@ export class TargetExecutor implements SerialHost {
     } catch (cause) {
       recordFailure(cause, phase);
     } finally {
+      bodyPolls.close();
       this.strayFailure = undefined;
       this.lastAttemptTestId = pair.test.id;
       attemptEnd.abort();

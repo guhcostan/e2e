@@ -15,6 +15,7 @@ import type { RawNodeData, RawObservedNode, SemanticMode, SemanticResult } from 
  * `mode.kind === 'node'` reads exactly one element for locator reads, in
  * the selector engine's task that found it (`read-selector.ts`,
  * `label-selector.ts`), so the element is always in its document.
+ * `mode.kind === 'hidden'` answers that one element's `states.hidden` alone.
  * `mode.kind === 'tree'` walks the subtree for one agent observation and
  * returns live element handles aligned with the flattened node list. The two
  * modes also project nodes differently; those differences are data (see
@@ -61,8 +62,10 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   /**
    * How the active mode projects one node, expressed as data so `describe`
    * stays branch-free. Tree mode is the model-bound projection: bounded text,
-   * a bounded attribute projection, hrefs reduced to origin+path, and the root
-   * document named by its title. Node mode is the full locator-read surface.
+   * a bounded attribute projection, hrefs reduced to origin+path, the root
+   * document named by its title, and no value on a checkbox or radio, whose
+   * value attribute is an app token its checked state already says more
+   * than. Node mode is the full locator-read surface.
    */
   const projection: {
     attributes: readonly string[] | null;
@@ -71,6 +74,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     redactHref: boolean;
     directTextOnly: boolean;
     documentRoot: boolean;
+    checkableValue: boolean;
   } =
     options.mode.kind === 'tree'
       ? {
@@ -80,6 +84,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
           redactHref: true,
           directTextOnly: true,
           documentRoot: true,
+          checkableValue: false,
         }
       : {
           attributes: null,
@@ -88,6 +93,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
           redactHref: false,
           directTextOnly: false,
           documentRoot: false,
+          checkableValue: true,
         };
 
   /**
@@ -286,15 +292,16 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * `hiddenAllowed` when that traversal began at a hidden target, whose whole
    * subtree then counts (2A); `visited` holds every element already read, so a
    * descendant that references its ancestor, or two that reference each other,
-   * contribute once. `generated` is set for an accessible name, which reads
-   * CSS generated content (`::before`, `::after`) as accname does, and unset
-   * for label text, which Playwright's `getByLabel` reads without it.
+   * contribute once. `accessible` is set for an accessible name, which reads
+   * CSS generated content (`::before`, `::after`) and an embedded control's
+   * value as accname does, and unset for label text, which Playwright's
+   * `getByLabel` reads without either.
    */
   interface NameWalk {
     readonly inReference: boolean;
     readonly hiddenAllowed: boolean;
     readonly visited: Set<Element>;
-    readonly generated: boolean;
+    readonly accessible: boolean;
   }
 
   /** Computed style of any element, SVG included, or undefined in a document with no view. */
@@ -302,11 +309,11 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     el.ownerDocument.defaultView?.getComputedStyle(el);
 
   /** A walk from the top, with the elements that may not contribute again already visited. */
-  const nameWalk = (visited: readonly Element[], generated: boolean): NameWalk => ({
+  const nameWalk = (visited: readonly Element[], accessible: boolean): NameWalk => ({
     inReference: false,
     hiddenAllowed: false,
     visited: new Set(visited),
-    generated,
+    accessible,
   });
 
   /**
@@ -458,7 +465,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
           inReference: true,
           hiddenAllowed: isReferenceHidden(target),
           visited: walk.visited,
-          generated: walk.generated,
+          accessible: walk.accessible,
         }),
       );
     }
@@ -467,13 +474,71 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   };
 
   /**
+   * What an embedded control contributes to a name computed through another
+   * element (accname 2C), by the rules Playwright's role selector applies, so
+   * `<button>Flash the screen <input value="3"> times</button>` is the button
+   * "Flash the screen 3 times": a textbox or searchbox its current value (an
+   * editable element its text), a combobox or listbox its selected options'
+   * names (a native select with none selected its first option, a text field
+   * with none its value), and a range widget its `aria-valuetext`, else its
+   * `aria-valuenow`, else its `value` attribute. A menu contributes nothing,
+   * and neither does a secure field, whose value no name may carry. Null for
+   * any other element, and for one its own `aria-labelledby` names, which is
+   * named, not embedded.
+   */
+  const embeddedControlNameOf = (el: Element, walk: NameWalk): string | null => {
+    const role = implicitRole(el);
+    if (role === null) return null;
+    if (el.id !== '' && (el.getAttribute('aria-labelledby') ?? '').trim().split(/\s+/).indexOf(el.id) !== -1) return null;
+    if (el.matches(options.secureFieldSelector)) return '';
+    if (role === 'textbox' || role === 'searchbox') {
+      return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value : el.textContent ?? '';
+    }
+    if (role === 'combobox' || role === 'listbox') {
+      let selected: Element[];
+      if (el instanceof HTMLSelectElement) {
+        selected = Array.from(el.selectedOptions);
+        if (selected.length === 0 && el.options.length > 0) selected.push(el.options[0]!);
+      } else {
+        const listbox = role === 'combobox' ? ariaOwnedOf(el).find((owned) => implicitRole(owned) === 'listbox') : el;
+        selected = listbox === undefined
+          ? []
+          : ariaOwnedOf(listbox).filter((owned) => owned.getAttribute('aria-selected') === 'true' && implicitRole(owned) === 'option');
+      }
+      if (selected.length === 0 && el instanceof HTMLInputElement) return el.value;
+      return selected.map((option) => contentNameOf(option, styleOf(option), walk)).join(' ');
+    }
+    if (role === 'progressbar' || role === 'scrollbar' || role === 'slider' || role === 'spinbutton' || role === 'meter') {
+      if (el.hasAttribute('aria-valuetext')) return el.getAttribute('aria-valuetext') ?? '';
+      if (el.hasAttribute('aria-valuenow')) return el.getAttribute('aria-valuenow') ?? '';
+      return el.getAttribute('value') ?? '';
+    }
+    return role === 'menu' ? '' : null;
+  };
+
+  /**
+   * Every element under `el` and every element its `aria-owns` names, with
+   * theirs: what a composite widget owns, as Playwright's role selector
+   * collects a combobox's listbox and a listbox's options.
+   */
+  const ariaOwnedOf = (el: Element): Element[] => {
+    const owned = Array.from(el.querySelectorAll('*'));
+    for (const id of (el.getAttribute('aria-owns') ?? '').trim().split(/\s+/)) {
+      const target = id === '' ? null : referencedElementOf(el, id);
+      if (target !== null) owned.push(target, ...Array.from(target.querySelectorAll('*')));
+    }
+    return owned;
+  };
+
+  /**
    * What one element contributes to a name computed through another: as an
    * aria-labelledby target (accname 2B) or as a descendant read for name from
-   * content (2F). Its own references, else its `aria-label`, its `alt`, its
-   * children, then its `title`. So `<button><img alt="Search"></button>` is
-   * the button "Search", an icon whose only child is
+   * content (2F). Its own references, else its value as an embedded control,
+   * its `aria-label`, its `alt`, its children, then its `title`. So
+   * `<button><img alt="Search"></button>` is the button "Search", an icon
+   * whose only child is
    * `<svg aria-labelledby="t"><title id="t">Close</title></svg>` is "Close",
-   * and a hidden `<span>` a button references still names it. A form
+   * and a hidden `<span>` a button references still names it. Any other form
    * control's content is its value, not label text, so it contributes nothing.
    * The title is the fallback only for empty content, untrimmed as Playwright
    * reads it: the spaces a block-level child adds count, so a flex container's
@@ -486,6 +551,8 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     if (!walk.hiddenAllowed && isNameHidden(el, style)) return '';
     const referenced = referencedNamesOf(el, walk);
     if (referenced !== null) return referenced.join(' ');
+    const embedded = walk.accessible ? embeddedControlNameOf(el, walk) : null;
+    if (embedded !== null) return embedded;
     const ariaLabel = el.getAttribute('aria-label');
     if (ariaLabel !== null && ariaLabel.trim() !== '') return ariaLabel.trim();
     const alternative = altOf(el) ?? svgTitleOf(el);
@@ -507,7 +574,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * `.next::after { content: " \2192" }` is the button "Go →".
    */
   const childrenNameOf = (el: Element, walk: NameWalk): string => {
-    let out = walk.generated ? beforeContentOf(el) : '';
+    let out = walk.accessible ? beforeContentOf(el) : '';
     for (const child of contentChildrenOf(el)) {
       if (child.nodeType === 3) {
         out += child.nodeValue ?? '';
@@ -519,7 +586,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
       const block = child.tagName === 'BR' || (style?.display ?? 'inline') !== 'inline';
       out += block ? ` ${token} ` : token;
     }
-    return walk.generated ? out + afterContentOf(el) : out;
+    return walk.accessible ? out + afterContentOf(el) : out;
   };
 
   /**
@@ -552,13 +619,15 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * its descendants' contributions, hidden and aria-hidden subtrees dropped (a
    * required-field marker, a decorative glyph), whitespace collapsed. The
    * element's own attributes are `accessibleName`'s business; this reads what
-   * is inside it. `generated` reads CSS generated content too, as an
-   * accessible name does and label text does not.
+   * is inside it. `accessible` reads CSS generated content and embedded
+   * controls' values too, as an accessible name does and label text does not.
+   * `named` is the element the text names when that is not `el` (a control
+   * read through its `<label>`), which never contributes to its own name.
    */
-  const nameTextOf = (el: Element, generated: boolean): string => {
+  const nameTextOf = (el: Element, accessible: boolean, named: Element = el): string => {
     if (isNameHidden(el, styleOf(el))) return '';
     if (NAME_OPAQUE_TAGS.has(el.tagName)) return '';
-    return childrenNameOf(el, nameWalk([el], generated)).replace(/\s+/g, ' ').trim();
+    return childrenNameOf(el, nameWalk([el, named], accessible)).replace(/\s+/g, ' ').trim();
   };
 
   const NAME_OPAQUE_TAGS: ReadonlySet<string> = new Set(['TEXTAREA', 'SELECT', 'INPUT', 'SCRIPT', 'STYLE']);
@@ -615,8 +684,13 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     return shown.length === 0 ? null : shown;
   };
 
-  /** Text owned directly by an element, excluding descendant elements. */
+  /**
+   * Text owned directly by an element, excluding descendant elements. An
+   * element with `content-visibility: hidden` renders none of it, as its
+   * `innerText` reads empty, so it owns none.
+   */
   const directTextOf = memoized((el: Element): string => {
+    if (styleOf(el)?.getPropertyValue('content-visibility') === 'hidden') return '';
     let out = '';
     for (const child of Array.from(el.childNodes)) {
       if (child.nodeType === 3) out += child.nodeValue ?? '';
@@ -633,7 +707,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     const labels = associatedLabels(el);
     if (labels.length > 0) {
       const joined = labels
-        .map((label) => nameTextOf(label, true))
+        .map((label) => nameTextOf(label, true, el))
         .join(' ')
         .trim();
       if (joined !== '') return joined;
@@ -776,22 +850,39 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   };
 
   /**
-   * The visibility Playwright's `toBeHidden` reads, so a semantic `hidden`
-   * state and the platform's own filter agree: `aria-hidden` on the element,
+   * True when an ancestor in the flat tree has `content-visibility: hidden`:
+   * it keeps its own box and skips rendering everything under it, slotted
+   * and shadow content included, as `checkVisibility()` reads it. Memoized,
+   * so siblings under one ancestor share the walk up.
+   */
+  const isSkippedContent = memoized((el: Element): boolean => {
+    const parent = el.assignedSlot ?? parentOrHostOf(el);
+    if (parent === null) return false;
+    return styleOf(parent)?.getPropertyValue('content-visibility') === 'hidden' || isSkippedContent(parent);
+  });
+
+  /**
+   * Render visibility, the one Playwright's `toBeVisible` and `toBeHidden`
+   * read, so a semantic `hidden` state and the platform's own filter agree:
    * `display: none` or a `visibility` other than `visible` on any element (an
-   * SVG included), content a closed `<details>` folds away, and a box with no
-   * width or no height. `display: contents` generates no box of its own while
-   * every child still paints (Shopify's one-page checkout form is one), so
-   * such an element is shown when some child element or text is, and hidden
-   * when nothing under it is.
+   * SVG included), content a `content-visibility: hidden` ancestor skips or a
+   * closed `<details>` folds away, and a box with no width or no height.
+   * `aria-hidden` is not in it: it removes a node from the accessibility tree
+   * (`hidesSubtree`, a role query) while the node still paints, as a spinner
+   * marked decorative does. `display: contents` generates no box of its own
+   * while every child still paints (Shopify's one-page checkout form is one),
+   * so such an element is shown when some child element or text is, and
+   * hidden when nothing under it is. Its text paints in its own `visibility`,
+   * which a range's box does not reflect, so text under a hidden one is
+   * hidden, where Playwright calls it visible.
    */
   const isHidden = (el: Element, style = styleOf(el)): boolean => {
-    if (el.getAttribute('aria-hidden') === 'true') return true;
     if (style === undefined) return true;
+    if (isSkippedContent(el)) return true;
     if (style.display === 'contents') {
       for (let child = el.firstChild; child !== null; child = child.nextSibling) {
         if (child instanceof Element && !isHidden(child)) return false;
-        if (child.nodeType === Node.TEXT_NODE && isVisibleText(child)) return false;
+        if (child.nodeType === Node.TEXT_NODE && style.visibility === 'visible' && isVisibleText(child)) return false;
       }
       return true;
     }
@@ -802,19 +893,21 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   };
 
   /**
-   * The part of `isHidden` that holds for everything under the element too,
-   * which is what lets the tree walk stop there. A box with no size is not in
-   * it: a zero-height `<html>` or wrapper still shows the fixed, absolute, and
-   * overflowing descendants laid out past its edges, so the walk goes on
-   * through it and only the element itself stays unlisted. An inert element
-   * is in it too (`isInert`).
+   * What takes the element and everything under it out of the tree walk: an
+   * `aria-hidden` or inert subtree, which the accessibility tree drops though
+   * it may paint (`isInert`), and `display: none` or a closed `<details>`
+   * body, which no descendant can undo. A `visibility` other than `visible`
+   * is not in it, since a descendant may set `visibility: visible` and paint
+   * again; nor is a box with no size: a zero-height `<html>` or wrapper still
+   * shows the fixed, absolute, and overflowing descendants laid out past its
+   * edges. The walk goes on through both and only the element itself stays
+   * unlisted.
    */
   const hidesSubtree = (el: Element, style: CSSStyleDeclaration | undefined): boolean =>
     el.getAttribute('aria-hidden') === 'true' ||
     isInert(el, style) ||
     style === undefined ||
     style.display === 'none' ||
-    (style.display !== 'contents' && style.visibility !== 'visible') ||
     isInClosedDetails(el);
 
   /**
@@ -1047,8 +1140,12 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     let checked: boolean | null = null;
     let selectedState: boolean | null = null;
     if (el instanceof HTMLInputElement) {
-      if (el.type === 'checkbox' || el.type === 'radio') checked = el.checked;
-      else value = el.value;
+      // A checkbox or radio submits its value attribute (`on` by default)
+      // whatever its checked state, so a locator read reports both; the tree
+      // drops that token as it drops an option's.
+      const checkable = el.type === 'checkbox' || el.type === 'radio';
+      if (checkable) checked = el.checked;
+      if (!checkable || projection.checkableValue) value = el.value;
     } else if (el instanceof HTMLTextAreaElement) {
       value = el.value;
     } else if (el instanceof HTMLSelectElement) {
@@ -1135,7 +1232,10 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     const isDocumentRoot = projection.documentRoot && tag === 'html';
     if (isDocumentRoot) name = el.ownerDocument.title;
 
-    const rect = el.getBoundingClientRect();
+    // No layout box at all (`display: none`, an empty `display: contents`) is
+    // no rect, as Playwright's `boundingBox()` answers null; a box with no
+    // size, or one `visibility: hidden` keeps, is still a rect.
+    const rect = el.getClientRects().length === 0 ? null : el.getBoundingClientRect();
     const role = isDocumentRoot ? 'document' : roleOf(el, tag);
     let level: number | null = null;
     if (role === 'heading') {
@@ -1167,12 +1267,13 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
       level,
       attributes,
       testId: el.getAttribute(options.testIdAttribute),
-      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      rect: rect === null ? null : { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     };
   };
 
   // The conditional return type resolves per call site; inside the body the
-  // discriminant narrows the value but not the generic, hence the two casts.
+  // discriminant narrows the value but not the generic, hence the casts.
+  if (options.mode.kind === 'hidden') return isHidden(element) as SemanticResult<Mode>;
   if (options.mode.kind === 'node') {
     return describe(element) as SemanticResult<Mode>;
   }
@@ -1278,6 +1379,8 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
       return;
     }
     if (OPAQUE_TAGS.indexOf(tag) !== -1) return;
+    // The element keeps its box, and nothing under it renders (`isSkippedContent`).
+    if (style?.getPropertyValue('content-visibility') === 'hidden') return;
     for (const child of Array.from(el.children)) walk(child, nextParent);
     // A shadow root is part of what the user sees, so it is part of what the
     // model is shown. Walking the host's light children and its shadow tree

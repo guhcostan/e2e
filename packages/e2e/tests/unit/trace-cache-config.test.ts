@@ -49,9 +49,20 @@ function memoryStore(): CacheStore & { entries: Map<string, string> } {
   };
 }
 
+/** The step every staged entry here was recorded for, whole. */
+const STEP = {
+  testId: 'tests/a.e2e.ts::a',
+  targetId: 'web',
+  instructionDigest: 'd'.repeat(64),
+  paramsDigest: 'e'.repeat(64),
+  callIndex: 0,
+  agent: 'default',
+};
+
 const trace = (summary: string): ActionTrace => ({
   actions: [{ name: 'tap', summary: 'tap button "X"', target: { role: 'button', name: 'X' } }],
   executor: { name: 'test' },
+  recordedFor: STEP,
   summary,
 });
 
@@ -217,12 +228,23 @@ describe('flushStagedTraces', () => {
     store.entries.set(KEY_A, stored);
     store.entries.set(KEY_B, stored);
     const context = contextWith(store);
-    context.staged.push({ kind: 'keep', keyHash: KEY_A, stepIndex: 1 });
-    context.staged.push({ kind: 'keep', keyHash: KEY_B, stepIndex: 3 });
+    context.staged.push({ kind: 'keep', keyHash: KEY_A, stepIndex: 1, recordedFor: STEP });
+    context.staged.push({ kind: 'keep', keyHash: KEY_B, stepIndex: 3, recordedFor: STEP });
     await flushStagedTraces(context, { lastVerifiedStepIndex: 2, implicatesUnconfirmed: true });
     // The same bytes, createdAt included: a replay is not a rewrite.
     expect(store.entries.get(KEY_A)).toBe(stored);
     expect(store.entries.has(KEY_B)).toBe(false);
+  });
+
+  it('completes the provenance of a confirmed kept entry recorded before the occurrence fields, and nothing else', async () => {
+    const store = memoryStore();
+    const { paramsDigest: _params, callIndex: _index, agent: _agent, ...legacy } = STEP;
+    const recorded = { ...trace('replayed flow'), recordedFor: legacy };
+    store.entries.set(KEY_A, JSON.stringify(buildTraceEntry(recorded)));
+    const context = contextWith(store);
+    context.staged.push({ kind: 'keep', keyHash: KEY_A, stepIndex: 1, recordedFor: STEP });
+    await flushStagedTraces(context, { lastVerifiedStepIndex: 2, implicatesUnconfirmed: true });
+    expect(readTraceEntry(JSON.parse(store.entries.get(KEY_A)!))?.payload).toEqual({ ...recorded, recordedFor: STEP });
   });
 
   it('writes what was confirmed and leaves every unconfirmed entry as stored when the failure implicates nothing', async () => {
@@ -234,18 +256,32 @@ describe('flushStagedTraces', () => {
     const context = contextWith(store);
     context.staged.push({ kind: 'write', keyHash: KEY_A, trace: trace('confirmed'), stepIndex: 1 });
     context.staged.push({ kind: 'write', keyHash: KEY_B, trace: trace('re-recorded, unconfirmed'), stepIndex: 3 });
-    context.staged.push({ kind: 'keep', keyHash: KEY_C, stepIndex: 4 });
+    context.staged.push({ kind: 'keep', keyHash: KEY_C, stepIndex: 4, recordedFor: STEP });
     await flushStagedTraces(context, { lastVerifiedStepIndex: 2, implicatesUnconfirmed: false });
     expect(store.entries.has(KEY_A)).toBe(true);
     expect(store.entries.get(KEY_B)).toBe(stored);
     expect(store.entries.get(KEY_C)).toBe(stored);
   });
 
+  it('claims a key per agent and per agent context, so one agent never replays another\'s recording', () => {
+    const fresh = () => contextWith(memoryStore());
+    const buyer = fresh().claimKey('act', 'approve the order', undefined, { name: 'buyer', context: undefined }).keyHash;
+    const admin = fresh().claimKey('act', 'approve the order', undefined, { name: 'admin', context: undefined }).keyHash;
+    const monthly = fresh().claimKey('act', 'approve the order', undefined, { name: 'buyer', context: 'Monthly' }).keyHash;
+    expect(new Set([buyer, admin, monthly]).size).toBe(3);
+    expect(fresh().claimKey('act', 'approve the order', undefined, { name: 'buyer', context: undefined }).keyHash).toBe(buyer);
+    // Another agent calling the same instruction first does not renumber this agent's occurrence.
+    const shared = fresh();
+    shared.claimKey('act', 'approve the order', undefined, { name: 'admin', context: undefined });
+    expect(shared.claimKey('act', 'approve the order', undefined, { name: 'buyer', context: undefined }).keyHash).toBe(buyer);
+  });
+
   it('claims distinct key hashes per occurrence of the same signature', () => {
     const context = contextWith(memoryStore());
-    const first = context.claimKeyHash('act', 'open billing', undefined);
-    const repeat = context.claimKeyHash('act', 'open billing', undefined);
-    const other = context.claimKeyHash('act', 'open billing', { fast: true });
+    const agent = { name: 'default', context: undefined };
+    const first = context.claimKey('act', 'open billing', undefined, agent).keyHash;
+    const repeat = context.claimKey('act', 'open billing', undefined, agent).keyHash;
+    const other = context.claimKey('act', 'open billing', { fast: true }, agent).keyHash;
     expect(first).toMatch(/^[a-f0-9]{64}$/);
     expect(repeat).not.toBe(first);
     expect(other).not.toBe(first);

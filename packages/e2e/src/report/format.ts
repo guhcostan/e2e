@@ -115,18 +115,23 @@ export function rule(text: string, align: 'center' | 'right'): { before: string;
 export interface Counters {
   passed: number;
   failed: number;
+  interrupted: number;
   flaky: number;
   skipped: number;
   total: number;
 }
 
 export function emptyCounters(): Counters {
-  return { passed: 0, failed: 0, flaky: 0, skipped: 0, total: 0 };
+  return { passed: 0, failed: 0, interrupted: 0, flaky: 0, skipped: 0, total: 0 };
 }
 
-/** The counter a result status lands in: every non-success status is a failure. */
-export function statusBucket(status: ResultStatus): 'passed' | 'failed' | 'flaky' | 'skipped' {
-  return status === 'passed' || status === 'flaky' || status === 'skipped' ? status : 'failed';
+/**
+ * The counter a result status lands in. A timeout is a failure; an
+ * interrupted test was stopped by the run, not by its own verdict, so it
+ * counts on its own.
+ */
+export function statusBucket(status: ResultStatus): 'passed' | 'failed' | 'interrupted' | 'flaky' | 'skipped' {
+  return status === 'timed-out' ? 'failed' : status;
 }
 
 /** Counts results by bucket; `total` is the number of items. */
@@ -139,17 +144,19 @@ export function tally(items: readonly { readonly status: ResultStatus }[]): Coun
   return counters;
 }
 
-/** A file's outcome from its tests: failed if any did, skipped if all did, else passed. */
-export function fileOutcome(counters: Counters): 'passed' | 'failed' | 'skipped' {
+/** A file's outcome from its tests: failed if any did, else interrupted if any was, skipped if all were, else passed. */
+export function fileOutcome(counters: Counters): 'passed' | 'failed' | 'interrupted' | 'skipped' {
   if (counters.failed > 0) return 'failed';
+  if (counters.interrupted > 0) return 'interrupted';
   if (counters.total > 0 && counters.skipped === counters.total) return 'skipped';
   return 'passed';
 }
 
-/** `2 failed | 10 passed | 1 flaky (13)` in vitest's colors and order. */
+/** `2 failed | 1 interrupted | 10 passed | 1 flaky (14)` in vitest's colors and order. */
 export function stateString(pc: Colors, counters: Counters): string {
   const parts = [
     counters.failed > 0 ? pc.bold(pc.red(`${counters.failed} failed`)) : undefined,
+    counters.interrupted > 0 ? pc.bold(pc.yellow(`${counters.interrupted} interrupted`)) : undefined,
     pc.bold(pc.green(`${counters.passed} passed`)),
     counters.flaky > 0 ? pc.yellow(`${counters.flaky} flaky`) : undefined,
     counters.skipped > 0 ? pc.gray(`${counters.skipped} skipped`) : undefined,

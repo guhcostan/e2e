@@ -23,7 +23,7 @@ import { collapseText } from '../internal/text.ts';
 import type { Report1Document, ReportError, ReportExplore, ReportExploreFinding, ReportResult, ReportStep, ReportTarget } from './build.ts';
 import { ENDED_TEXT, orderFindings, SEVERITY_WORDS, stepCountParts } from './explore-text.ts';
 import { formatCost, formatTokens, repeatSuffix, statusBucket, tally, type Counters } from './format.ts';
-import { repeatGroups, repeatLine, repeatSummary } from './repeats.ts';
+import { repeatGroups, repeatLine, repeatSummary, type RepeatGroup } from './repeats.ts';
 import {
   attemptsLine,
   detailLines,
@@ -101,11 +101,11 @@ interface Entry {
 /** Screenshots first, then the recording, then the trace; the compiler fails when a kind is missing here. */
 const KIND_RANK: Record<ArtifactKind, number> = { screenshot: 0, video: 1, trace: 2, download: 3, log: 4 };
 
-const ICON: Record<Bucket, string> = { failed: '🔴', flaky: '⚠️', skipped: '⏭️', passed: '🟢' };
+const ICON: Record<Bucket, string> = { failed: '🔴', interrupted: '⏹️', flaky: '⚠️', skipped: '⏭️', passed: '🟢' };
 /** Worst first: the order failures are listed, files are sorted, and a file's glyph is chosen in. */
-const WORST_FIRST: readonly Bucket[] = ['failed', 'flaky', 'skipped', 'passed'];
-/** The order counts read in: `1 failed, 1 flaky, 3 passed, 1 skipped`. */
-const COUNT_ORDER: readonly Bucket[] = ['failed', 'flaky', 'passed', 'skipped'];
+const WORST_FIRST: readonly Bucket[] = ['failed', 'interrupted', 'flaky', 'skipped', 'passed'];
+/** The order counts read in: `1 failed, 2 interrupted, 1 flaky, 3 passed, 1 skipped`. */
+const COUNT_ORDER: readonly Bucket[] = ['failed', 'interrupted', 'flaky', 'passed', 'skipped'];
 
 function worstBucket(results: readonly ReportResult[]): Bucket {
   const present = new Set(results.map((result) => statusBucket(result.status)));
@@ -125,9 +125,23 @@ function pageName(options: MarkdownReportOptions): string {
   return title === '' ? 'e2e' : `e2e ${cell(title, MAX_ID_CHARS)}`;
 }
 
+/**
+ * The headline's glyph: red for a failed run or any failed test, the
+ * interrupted glyph for a run or a listed test the run stopped, else green.
+ * A `--last-failed` rerun that passed can still list a test the first pass
+ * never finished, and the page must not read as all green.
+ */
+function runIcon(run: ReportRun, results: readonly ReportResult[]): string {
+  if (run.status !== 'passed' && run.status !== 'interrupted') return ICON.failed;
+  const worst = worstBucket(results);
+  if (worst === 'failed') return ICON.failed;
+  if (worst === 'interrupted' || run.status === 'interrupted') return ICON.interrupted;
+  return ICON.passed;
+}
+
 function headline(run: ReportRun, results: readonly ReportResult[], options: MarkdownReportOptions): string {
   const summary = countText(tally(results)) || (run.errors.length > 0 ? 'no tests ran' : 'no tests selected');
-  return `### ${run.status === 'passed' ? ICON.passed : ICON.failed} ${pageName(options)}: ${summary}`;
+  return `### ${runIcon(run, results)} ${pageName(options)}: ${summary}`;
 }
 
 /** The model calls an agent step made; the step's metrics are the source of truth. */
@@ -301,6 +315,12 @@ function flakyFold(entries: readonly Entry[], manyTargets: boolean, options: Mar
   return [['<details>', `<summary>${summary}</summary>`, '', shown.join('\n\n'), '</details>'].join('\n')];
 }
 
+/** A test that missed a run: flaky when a run failed, else interrupted when the run stopped one, else skipped. */
+function missIcon(group: RepeatGroup): string {
+  if (group.unstable) return ICON.flaky;
+  return group.runs.some((run) => run.status === 'interrupted') ? ICON.interrupted : ICON.skipped;
+}
+
 /**
  * A `--repeat-each` run's tally: how many tests passed every run, then each
  * test that did not, with the runs that failed. Empty for a run that
@@ -318,10 +338,11 @@ function repeatsSection(entries: readonly Entry[], manyTargets: boolean): string
     run: { repeat: result.repeat, status: result.status, code: final.final.error?.code ?? final.lastFailed?.error?.code },
   }));
   if (groups.length === 0) return [];
-  const unstable = groups.filter((group) => group.passed < group.runs.length);
+  // A test is listed when it missed a run: a flake first, then one the run cut short.
+  const missed = groups.filter((group) => group.passed < group.runs.length).toSorted((a, b) => Number(b.unstable) - Number(a.unstable));
   return [
     `**Repeats:** ${repeatSummary(groups)}`,
-    ...(unstable.length === 0 ? [] : ['', ...unstable.map((group) => `- ${ICON.flaky} ${group.label}: ${cell(repeatLine(group))}`)]),
+    ...(missed.length === 0 ? [] : ['', ...missed.map((group) => `- ${missIcon(group)} ${group.label}: ${cell(repeatLine(group))}`)]),
   ];
 }
 
@@ -426,13 +447,13 @@ function footer(run: ReportRun, targets: readonly ReportTarget[], options: Markd
 
 // --- the exploration record ---
 
-function exploreHeadline(run: ReportRun, explore: ReportExplore, options: MarkdownReportOptions): string {
+function exploreHeadline(run: ReportRun, results: readonly ReportResult[], explore: ReportExplore, options: MarkdownReportOptions): string {
   const issues = explore.findings.filter((finding) => finding.kind === 'issue').length;
   const warnings = explore.findings.length - issues;
   const counts = [...(issues > 0 ? [plural(issues, 'issue')] : []), ...(warnings > 0 ? [plural(warnings, 'warning')] : [])];
   const summary =
     counts.length > 0 ? counts.join(', ') : run.status === 'blocked' ? 'explored nothing' : run.status === 'passed' ? 'no findings' : 'did not finish';
-  return `### ${run.status === 'passed' ? ICON.passed : ICON.failed} ${pageName(options)} explore: ${summary}`;
+  return `### ${runIcon(run, results)} ${pageName(options)} explore: ${summary}`;
 }
 
 /** `3 of 8 steps · 2 passed · 1 failed · the agent covered the goal`. */
@@ -529,7 +550,7 @@ export function renderMarkdownReport(report: Report1Document, options: MarkdownR
   );
 
   const spend = spendLine(run, entries);
-  const head = [explore === undefined ? headline(run, selected, options) : exploreHeadline(run, explore, options), ...(spend === undefined ? [] : [spend]), ''];
+  const head = [explore === undefined ? headline(run, selected, options) : exploreHeadline(run, selected, explore, options), ...(spend === undefined ? [] : [spend]), ''];
   const groups = fileGroups(entries);
   const sections =
     explore === undefined
@@ -552,9 +573,9 @@ function failurePageName(result: ReportResult): string {
 }
 
 /**
- * The results that get a page: every one that failed, timed out, was
- * interrupted, or was flaky, except an exploration's own verdict, which its
- * findings already tell.
+ * The results that get a page: every one that failed, timed out, or was
+ * flaky, except an exploration's own verdict, which its findings already
+ * tell. An interrupted test reached no verdict, so it has no failure to tell.
  */
 function pagedResults(report: Report1Document): ReportResult[] {
   const explore = report.run.explore;
@@ -571,7 +592,7 @@ function pagedResults(report: Report1Document): ReportResult[] {
  * `summary.md` beside `report.json`, with evidence listed as paths from the
  * project root, for a reader with the checkout in front of it: a pull
  * request description, a coding agent's handoff, a wiki page. Every test
- * that did not pass gets a page of its own under `failures/`, with the
+ * that failed or was flaky gets a page of its own under `failures/`, with the
  * screen at failure inline; the run page links each block to its page. The
  * directory is the reporter's: what an earlier run left there is removed
  * first, so a stale page never describes a failure this run did not have.

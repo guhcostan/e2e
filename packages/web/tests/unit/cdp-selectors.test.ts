@@ -1,5 +1,5 @@
 /** The CDP compatibility boundary must support Playwright's proxy channel and fail closed otherwise. */
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext } from 'playwright-core';
 import { expect, it, vi } from 'vitest';
 import { registerCdpSelectors } from '../../src/cdp-selectors.ts';
 import { SELECTOR_ENGINES } from '../../src/selector-engines.ts';
@@ -11,7 +11,7 @@ it('registers every owned selector engine, and nothing else, through a dynamical
   const channel = new Proxy({}, { get: (_target, key) => key === 'registerSelectorEngine' ? register : undefined });
   const options = budget();
   await registerCdpSelectors({ _channel: channel } as unknown as BrowserContext, options);
-  expect(SELECTOR_ENGINES.map(({ name }) => name)).toEqual(['e2e-closed', 'e2e-roots', 'e2e-label', 'e2e-read']);
+  expect(SELECTOR_ENGINES.map(({ name }) => name)).toEqual(['e2e-closed', 'e2e-roots', 'e2e-label', 'e2e-read', 'e2e-shown']);
   expect(register).toHaveBeenCalledTimes(SELECTOR_ENGINES.length);
   for (const { name, source } of SELECTOR_ENGINES) {
     expect(register).toHaveBeenCalledWith({ selectorEngine: {

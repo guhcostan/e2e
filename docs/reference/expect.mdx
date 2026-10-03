@@ -52,7 +52,7 @@ before passing its result to `expect`.
 | Default timeout | `config.assertionTimeout`, 5000 ms |
 | Override | `{ timeout }` in milliseconds, on every locator and `browser` matcher |
 | Unknown option | `INVALID_ARGUMENT` before the first read, from JavaScript too |
-| Negation grace window | A negated matcher passes after 1000 ms of continuous truth, or after the whole budget when `{ timeout }` is shorter than that |
+| Negation grace window | A negated matcher passes after 1000 ms of continuous truth, or at the deadline when `{ timeout }` is shorter than that and the negation held for the whole budget. The window counts from the moment the first read that saw the negation started, so a slow read counts toward it |
 | Failure code | `ASSERTION_FAILED`, exit code 1 |
 
 Locator strictness: except for `toHaveCount` and the list form of
@@ -462,11 +462,15 @@ ASSERTION_FAILED: 2 soft assertions failed
 A soft locator or `browser` matcher is still a recorded `expect.<matcher>` step,
 marked failed, so the report shows where in the flow it landed. A soft value
 matcher is not a step, the same as a hard one; its failure appears in the
-final error only.
+attempt's error records.
 
 When the body throws on its own, or times out, that error stays the
 attempt's verdict and the soft failures are recorded beside it under
-`secondaryErrors`. A body that skips itself with `test.skip(...)` drops them.
+`secondaryErrors`. A body that skips itself with `test.skip(...)` keeps them
+there too. The CLI shows `Skipped After Failure`; set
+[`failOnSkippedFailure: true`](/reference/config) to make that run fail with
+exit code 1. Without that option, the test stays skipped and does not affect
+the exit code.
 
 A soft `toMatchSchema` returns the schema's output when the value matches
 and `undefined` after a kept failure, and its type says so.
@@ -551,3 +555,14 @@ await expect.poll(() => readStatus(), { message: 'the batch never finished' }).n
 
 `expect.poll` is not recorded as a report step; a timeout surfaces only as
 the test's failure.
+
+Await every poll. A poll belongs to the phase that started it: the test body
+(with its fixtures and `beforeEach` hooks), one `afterEach` hook or fixture
+teardown, or one `beforeAll` or `afterAll` hook. When that phase returns while
+the poll still runs, the poll is cancelled and the phase fails with
+`STEP_NOT_AWAITED` at the line of the call, whether or not the poll would
+have passed. It never fails a later test: a poll started by work its phase
+left running, such as a body past its timeout, is cancelled before its first
+read. A body that threw keeps its own
+error and records this one under `secondaryErrors`, and a suite hook reports
+it as `HOOK_FAILED`.

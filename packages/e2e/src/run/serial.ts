@@ -13,7 +13,7 @@ import { groupTitles, type RegisteredTest } from '../collect/registry.ts';
 import { pairRecordings, type SkipInfo, type TestTargetPair } from '../collect/select.ts';
 import type { ResolvedTarget } from '../config/resolve.ts';
 import type { ArtifactStore } from '../types.ts';
-import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
+import { attemptSegments, createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import type { AttemptContext, ClosingRecord, SessionClose, SessionPlan } from './execute.ts';
 import type { ArtifactSink } from './fixtures.ts';
 import type { StepRecord } from './steps.ts';
@@ -51,6 +51,8 @@ export interface SharedSerialSession {
 export interface SerialHost {
   readonly target: ResolvedTarget;
   readonly artifactsRoot: string;
+  /** See `TargetExecutorOptions.rerunDir`. */
+  readonly rerunDir: string | undefined;
   readonly runId: string;
   /** The configured artifact store, so group-owned artifacts (the shared trace) upload like any other. */
   readonly artifactStore: ArtifactStore | undefined;
@@ -125,7 +127,9 @@ export async function runSerialUnit(
     async (attemptIndex) => {
       const attempt = await runSerialAttempt(host, members, file, attemptIndex);
       group.attempts.push(attempt);
-      for (const member of attempt.members) memberFinalStatus.set(member.testId, member);
+      // A retry the run interrupted keeps the verdict before it, so each member keeps what that attempt said.
+      const cutRetry = attemptIndex > 0 && attempt.status === 'interrupted';
+      if (!cutRetry) for (const member of attempt.members) memberFinalStatus.set(member.testId, member);
       // A beforeAll failure is not retry-eligible: the
       // attempt stands as recorded and the retry loop stops here.
       if (attempt.error?.code === 'HOOK_FAILED') return undefined;
@@ -184,13 +188,13 @@ async function runSerialAttempt(
   const memberRecords: SerialMemberRecord[] = [];
   const first = members[0]!;
   const recordings = pairRecordings(first, attemptIndex);
-  const artifactSegments = [
+  const artifactSegments = attemptSegments(host.rerunDir, [
     host.target.name,
     sanitizePathSegment(first.test.serialId ?? first.test.id),
     first.agent,
     ...repeatSegment(first.repeat),
     `attempt-${attemptIndex}`,
-  ];
+  ]);
   const artifacts = createAttemptArtifacts({
     artifactsRoot: host.artifactsRoot,
     segments: artifactSegments,

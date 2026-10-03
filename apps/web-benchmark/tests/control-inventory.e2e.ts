@@ -17,6 +17,12 @@ test.describe('control inventory', () => {
     await expect(screen.getByLabel('Toggles state')).toHaveText('terms not agreed, size Medium');
   });
 
+  test('check picks a radio the pick replaces with its summary', async ({ screen }) => {
+    await screen.getByRole('radio', 'Express').check();
+    await expect(screen.getByLabel('Delivery state')).toHaveText('Express');
+    await expect(screen.getByText('Express delivery selected')).toBeVisible();
+  });
+
   test('a long press and a double click are told apart from a tap', async ({ screen }) => {
     const hold = screen.getByRole('button', 'Hold me');
     await hold.tap();
@@ -64,6 +70,7 @@ test.describe('control inventory', () => {
   test('every exercise done shows the success message', async ({ app, screen }) => {
     await screen.getByLabel('Agree to terms').check();
     await screen.getByRole('radio', 'Medium').check();
+    await screen.getByRole('radio', 'Express').check();
     await screen.getByRole('button', 'Hold me').longPress({ duration: 700 });
     await screen.getByRole('button', 'Double-click me').doubleTap();
     await screen.getByText('report.pdf', { exact: true }).secondaryTap();

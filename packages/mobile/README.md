@@ -146,7 +146,8 @@ test, for upgrade and fresh-install paths the target's `app.appPath` cannot
 express.
 A plain install replaces the binary and keeps its data; `reinstall: true`
 removes the app named by `app` (default: the pinned app) first. It resolves to
-the bundle id or package to `openApp` the build by. `openApp` takes an app id,
+the bundle id or package to `openApp` the build by, else the `app` passed in;
+with no reported id and no `app`, it fails with `ENGINE_FAILURE`. `openApp` takes an app id,
 never a link; `openLink` opens one, under the navigation rule.
 
 ## Agent tools

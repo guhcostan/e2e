@@ -187,7 +187,46 @@ describe('renderJunitReport', () => {
       }),
     );
     expect(xml).toContain('<failure message="timed-out" type="timed-out">timed-out</failure>');
-    expect(xml).toContain('<error message="interrupted" type="interrupted">interrupted</error>');
+    expect(xml).toContain('<skipped message="interrupted: the run was stopped"/>');
+  });
+
+  it('tells the failure an interrupted retry was cut short after', () => {
+    const interrupt = reportError({ category: 'interrupted', code: 'INTERRUPTED', message: 'run interrupted in phase body' });
+    const xml = render(
+      reportDocument({
+        results: [
+          reportResult({
+            status: 'failed',
+            attempts: [
+              reportAttempt({ index: 0, status: 'failed', error: reportError() }),
+              reportAttempt({ id: 'attempt-2', index: 1, status: 'interrupted', error: interrupt }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(xml).toContain('<failure message="expected &quot;Sign in&quot; to be visible" type="ASSERTION_FAILED">');
+    expect(rootAttributes(xml)).toMatchObject({ failures: '1', errors: '0', skipped: '0' });
+  });
+
+  it('renders an interrupted result as skipped with why, never as a failure or an error', () => {
+    const xml = render(
+      reportDocument({
+        results: [
+          reportResult({
+            status: 'interrupted',
+            attempts: [
+              reportAttempt({
+                status: 'interrupted',
+                error: { category: 'interrupted', code: 'INTERRUPTED', message: 'run interrupted in phase body', retryable: false },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(xml).toContain('<skipped message="interrupted: run interrupted in phase body"/>');
+    expect(rootAttributes(xml)).toMatchObject({ tests: '1', failures: '0', errors: '0', skipped: '1' });
   });
 
   it('renders skipped results with their reason and no attempt time', () => {

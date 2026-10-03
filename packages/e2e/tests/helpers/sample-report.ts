@@ -158,7 +158,7 @@ export function sampleReport(): Report1Document {
         phase: 'launch',
       }),
     ],
-    summary: { discovered: 3, selected: 2, executed: 2, passed: 1, failed: 1, flaky: 0, skipped: 1 },
+    summary: { discovered: 3, selected: 2, executed: 2, passed: 1, failed: 1, interrupted: 0, flaky: 0, skipped: 0 },
     usage: {
       discoveredResults: 3,
       maxAgentContextBytes: 1,

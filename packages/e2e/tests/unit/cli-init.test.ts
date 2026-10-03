@@ -96,7 +96,7 @@ describe('e2e init', () => {
     expect(JSON.parse(read('package.json'))).toEqual({
       private: true,
       type: 'module',
-      devDependencies: { 'e2e': dependencyRange(runnerVersion), '@e2e-dev/web': '0.x', playwright: '^1', ai: '^7.0.0', zod: '^4.1.8' },
+      devDependencies: { 'e2e': dependencyRange(runnerVersion), '@e2e-dev/web': '0.x', ai: '^7.0.0', zod: '^4.1.8' },
       scripts: { 'test:e2e': 'e2e run' },
     });
     expect(read('e2e.config.ts')).toContain('agents: {\n    default: {\n      model: ');
@@ -201,7 +201,7 @@ describe('e2e init', () => {
     const device = engine === 'mobile';
     expect(Object.keys(manifest.devDependencies)).toEqual([
       'e2e',
-      ...(engine === 'web' ? ['@e2e-dev/web', 'playwright'] : []),
+      ...(engine === 'web' ? ['@e2e-dev/web'] : []),
       ...(device ? ['@e2e-dev/mobile'] : []),
       ...(ai ? ['ai', 'zod', '@openrouter/ai-sdk-provider'] : []),
     ]);
@@ -260,6 +260,7 @@ describe('e2e init', () => {
         expect.objectContaining({ value: 'openai-compatible', label: 'OpenAI-compatible endpoint' }),
         expect.objectContaining({ value: 'chatgpt', label: 'ChatGPT Plus/Pro subscription' }),
         expect.objectContaining({ value: 'copilot', label: 'GitHub Copilot subscription' }),
+        expect.objectContaining({ value: 'opencode-console', label: 'OpenCode Console' }),
         expect.objectContaining({ value: 'grok', label: 'SuperGrok subscription' }),
         expect.objectContaining({ value: 'none' }),
       ],
@@ -275,9 +276,16 @@ describe('e2e init', () => {
   });
 
   it.each([
-    { gateway: 'chatgpt', provider: 'openai', line: "import { chatgpt } from 'e2e/oauth/chatgpt';", model: "model: chatgpt('gpt-6-luna'),", sdk: '@ai-sdk/openai' },
-    { gateway: 'copilot', provider: 'github-copilot', line: "import { copilot } from 'e2e/oauth/copilot';", model: "model: copilot('claude-sonnet-5'),", sdk: '@ai-sdk/openai-compatible' },
-    { gateway: 'grok', provider: 'spacexai', line: "import { grok } from 'e2e/oauth/grok';", model: "model: grok('grok-4'),", sdk: '@ai-sdk/xai' },
+    { gateway: 'chatgpt', provider: 'openai', line: "import { chatgpt } from 'e2e/oauth/chatgpt';", model: "model: chatgpt('gpt-6-luna'),", sdk: ['@ai-sdk/openai'] },
+    { gateway: 'copilot', provider: 'github-copilot', line: "import { copilot } from 'e2e/oauth/copilot';", model: "model: copilot('claude-sonnet-5'),", sdk: ['@ai-sdk/openai-compatible', '@ai-sdk/openai'] },
+    {
+      gateway: 'opencode-console',
+      provider: 'opencode-console',
+      line: "import { opencodeConsole } from 'e2e/oauth/opencode-console';",
+      model: "model: opencodeConsole('deepseek-v4.1-flash'),",
+      sdk: ['@ai-sdk/openai-compatible', '@ai-sdk/openai', '@ai-sdk/anthropic', '@ai-sdk/google'],
+    },
+    { gateway: 'grok', provider: 'spacexai', line: "import { grok } from 'e2e/oauth/grok';", model: "model: grok('grok-4'),", sdk: ['@ai-sdk/xai'] },
   ] as const)('writes a $gateway subscription model and names the sign-in as the next step', async ({ gateway, provider, line, model, sdk }) => {
     vi.mocked(clack.select).mockResolvedValueOnce('web').mockResolvedValueOnce(gateway);
     vi.mocked(clack.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -289,7 +297,7 @@ describe('e2e init', () => {
     expect(read('e2e.config.ts')).toContain(`sign in once with \`e2e login ${provider}\``);
     const devDependencies = JSON.parse(read('package.json')).devDependencies;
     expect(devDependencies).toHaveProperty('ai', '^7.0.0');
-    expect(devDependencies).toHaveProperty(sdk);
+    for (const name of sdk) expect(devDependencies).toHaveProperty(name);
     expect(output()).toContain(`e2e login ${provider}, then`);
   });
 
@@ -357,7 +365,7 @@ describe('e2e init', () => {
     async (type) => {
       const manifest = `${JSON.stringify({
         name: 'existing-app', type, scripts: { 'test:e2e': 'e2e run --workers 1' },
-        dependencies: { 'e2e': 'workspace:*', '@e2e-dev/web': 'workspace:*', playwright: '1.59.0-alpha-2026-01-01', ai: '^7.0.12', zod: '^4.0.0' },
+        dependencies: { 'e2e': 'workspace:*', '@e2e-dev/web': 'workspace:*', ai: '^7.0.12', zod: '^4.0.0' },
       }, null, 4)}\n`;
       writeFileSync(path.join(dir, 'package.json'), manifest);
       for (let run = 0; run < 2; run += 1) {
@@ -396,12 +404,12 @@ describe('e2e init', () => {
     expect(JSON.parse(read('package.json'))).toEqual({
       ...manifest,
       scripts: { dev: 'vite', 'test:e2e': 'e2e run' },
-      devDependencies: { ...manifest.devDependencies, 'e2e': expect.any(String), playwright: '^1', zod: '^4.1.8' },
+      devDependencies: { ...manifest.devDependencies, 'e2e': expect.any(String), zod: '^4.1.8' },
     });
     expect(read('package.json')).toContain('\r\n    "name"');
     const written = JSON.parse(read('package.json'));
     expect(Object.keys(written)).toEqual(Object.keys(manifest));
-    expect(Object.keys(written.devDependencies)).toEqual(['@e2e-dev/web', 'e2e', 'playwright', 'vite', 'zod']);
+    expect(Object.keys(written.devDependencies)).toEqual(['@e2e-dev/web', 'e2e', 'vite', 'zod']);
     expect(Object.keys(written.scripts)).toEqual(['dev', 'test:e2e']);
   });
 
@@ -412,20 +420,6 @@ describe('e2e init', () => {
     const written = JSON.parse(read('package.json'));
     expect(Object.keys(written.scripts)).toEqual(['lint', 'typecheck', 'test:e2e']);
     expect(Object.keys(written.devDependencies).slice(0, 2)).toEqual(['vite', '@types/node']);
-  });
-
-  it("keeps the app's own playwright and adds only the engine next to it", async () => {
-    const manifest = {
-      name: 'existing-app',
-      dependencies: { playwright: '1.59.0-alpha-2026-01-01' },
-    };
-    writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    vi.mocked(clack.select).mockResolvedValueOnce('web').mockResolvedValueOnce('none');
-    vi.mocked(clack.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    await init(dir);
-    const written = JSON.parse(read('package.json'));
-    expect(written.dependencies).toEqual(manifest.dependencies);
-    expect(Object.keys(written.devDependencies)).toEqual(['e2e', '@e2e-dev/web']);
   });
 
   it.each([

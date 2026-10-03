@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFixtureApp, type FixtureApp } from '../helpers/fixture-app.ts';
@@ -890,6 +890,8 @@ test('never started either', async () => {});
       expect(interrupted.status).toBe('interrupted');
       expect(planned).toBe(3);
       expect(interrupted.report.run.summary.discovered).toBe(planned);
+      // The test the interrupt stopped reached no verdict: it is not a failure.
+      expect(interrupted.report.run.summary).toMatchObject({ selected: 3, passed: 0, failed: 0, interrupted: 1, skipped: 2 });
       for (const title of ['never started', 'never started either']) {
         const result = resultByTitle(interrupted, title);
         expect(result.status).toBe('skipped');
@@ -907,6 +909,86 @@ test('never started either', async () => {});
         ['never started', true, 'passed'],
         ['never started either', true, 'passed'],
       ]);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    'an interrupt during a serial group retry keeps each member\'s verdict from the attempt before it',
+    async () => {
+      const project = createProject({});
+      const marker = path.join(project.dir, 'failed-once');
+      mkdirSync(path.join(project.dir, 'tests'), { recursive: true });
+      writeFileSync(
+        path.join(project.dir, 'tests', 'flow.e2e.ts'),
+        `import { existsSync, writeFileSync } from 'node:fs';
+import { test } from 'e2e';
+test.describe('flow', { serial: true }, () => {
+  test('first step', async () => {
+    if (!existsSync(${JSON.stringify(marker)})) {
+      writeFileSync(${JSON.stringify(marker)}, '');
+      throw new Error('first attempt fails');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 60_000));
+  });
+  test('second step', async () => {});
+});
+`,
+      );
+      const controller = new AbortController();
+      let starts = 0;
+      const outcome = await runExisting(project, {
+        appUrl: app.url,
+        config: { tests: 'tests/**/*.e2e.ts', retries: 1 },
+        runOptions: {
+          interruptSignal: controller.signal,
+          onEvent: (event) => {
+            // A serial member starts once per group attempt: the second start is the retry.
+            if (event.type === 'test-started' && event.title === 'flow > first step' && (starts += 1) === 2) controller.abort();
+          },
+        },
+      });
+      expect(outcome.exitCode).toBe(130);
+      expect(outcome.report.run.serialGroups[0]?.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'interrupted']);
+      expect(resultByTitle(outcome, 'first step').status).toBe('failed');
+      expect(outcome.report.run.summary).toMatchObject({ failed: 1, interrupted: 0 });
+      assertValidReport(outcome.report);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    'a forced interrupt still writes the junit and markdown files, so none of the previous run is left beside the report',
+    async () => {
+      const project = createProject({
+        'tests/sleeps.e2e.ts': `import { test } from 'e2e';
+test('sleeps until interrupted', async () => {
+  await new Promise((resolve) => setTimeout(resolve, 60_000));
+});
+`,
+      });
+      const output = path.join(project.dir, '.e2e');
+      mkdirSync(output, { recursive: true });
+      writeFileSync(path.join(output, 'summary.md'), '### 🟢 e2e: 3 passed\n');
+      writeFileSync(path.join(output, 'junit.xml'), '<testsuites tests="3"/>\n');
+      const force = new AbortController();
+      const outcome = await runExisting(project, {
+        appUrl: app.url,
+        config: { tests: 'tests/**/*.e2e.ts', reporters: ['junit', 'markdown'] },
+        runOptions: {
+          forceSignal: force.signal,
+          onEvent: (event) => {
+            if (event.type === 'test-started') force.abort();
+          },
+        },
+      });
+      expect(outcome.exitCode).toBe(130);
+      expect(outcome.report.run.summary).toMatchObject({ failed: 0, interrupted: 1 });
+      expect(readFileSync(path.join(output, 'summary.md'), 'utf8')).toMatch(/^### ⏹️ e2e: 1 interrupted\n/u);
+      expect(readFileSync(path.join(output, 'junit.xml'), 'utf8')).toContain('<skipped message="interrupted: ');
+      expect(existsSync(path.join(output, 'failures'))).toBe(false);
       project.cleanup();
     },
     120_000,
@@ -1066,6 +1148,127 @@ test('fails', async () => {
   );
 
   it(
+    '--last-failed keeps owing what the failure limit or another filter left out until a run carries it out',
+    async () => {
+      const failing = (title: string) => `import { test } from 'e2e';
+test('${title}', async () => {
+  throw new Error('${title} is broken');
+});
+`;
+      const project = createProject({ 'tests/first.e2e.ts': failing('first'), 'tests/second.e2e.ts': failing('second') });
+      const config = { tests: 'tests/**/*.e2e.ts', workers: 1 };
+      const selection = (outcome: RunOutcome) =>
+        outcome.results.toSorted((a, b) => (a.test.file < b.test.file ? -1 : 1)).map((result) => [result.test.title, result.selected, result.status, result.skip?.cause]);
+
+      const limited = await runExisting(project, { appUrl: app.url, config, runOptions: { maxFailures: 1 } });
+      expect(limited.exitCode).toBe(1);
+      expect(selection(limited)).toEqual([
+        ['first', true, 'failed', undefined],
+        ['second', true, 'skipped', 'failure-limit'],
+      ]);
+
+      // The failure limit stopped `second` before it ran, so it is owed; a rerun narrowed to `first` carries it.
+      writeFileSync(path.join(project.dir, 'tests', 'first.e2e.ts'), `import { test } from 'e2e';\ntest('first', async () => {});\n`);
+      const rerun = await runExisting(project, { appUrl: app.url, config, runOptions: { lastFailed: true, grep: [/first/] } });
+      expect(rerun.exitCode).toBe(0);
+      expect(selection(rerun)).toEqual([
+        ['first', true, 'passed', undefined],
+        ['second', false, 'skipped', 'filtered'],
+      ]);
+      expect(rerun.report.run.carried?.results.map((result) => [result.titlePath.at(-1), result.status, result.skip?.cause])).toEqual([['second', 'skipped', 'failure-limit']]);
+      assertValidReport(rerun.report);
+
+      // Left out by --grep, `second` is still owed: the next --last-failed runs it, and only it.
+      const owed = await runExisting(project, { appUrl: app.url, config, runOptions: { lastFailed: true } });
+      expect(owed.exitCode).toBe(1);
+      expect(selection(owed)).toEqual([
+        ['first', false, 'skipped', 'filtered'],
+        ['second', true, 'failed', undefined],
+      ]);
+      expect(owed.report.run.carried).toBeUndefined();
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    '--last-failed narrowed past a file that fails to import keeps owing its tests until a run carries them out',
+    async () => {
+      const failing = (title: string) => `import { test } from 'e2e';
+test('${title}', async () => {
+  throw new Error('${title} is broken');
+});
+`;
+      const project = createProject({ 'tests/first.e2e.ts': failing('first'), 'tests/second.e2e.ts': failing('second') });
+      const first = await runExisting(project, { appUrl: app.url });
+      expect(first.exitCode).toBe(1);
+
+      // `second` is owed and its file no longer imports; a rerun narrowed to `first` cannot collect it, so it carries it.
+      writeFileSync(path.join(project.dir, 'tests', 'first.e2e.ts'), `import { test } from 'e2e';\ntest('first', async () => {});\n`);
+      writeFileSync(path.join(project.dir, 'tests', 'second.e2e.ts'), `import './not-written-yet.ts';\n${failing('second')}`);
+      const narrowed = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true, files: ['tests/first.e2e.ts'] } });
+      expect(narrowed.exitCode).toBe(0);
+      expect(narrowed.results.map((result) => [result.test.title, result.status])).toEqual([['first', 'passed']]);
+      expect(narrowed.report.run.carried?.results.map((result) => [result.titlePath.at(-1), result.status])).toEqual([['second', 'failed']]);
+      assertValidReport(narrowed.report);
+
+      // Once the file imports again, the next --last-failed runs `second`, and only it.
+      writeFileSync(path.join(project.dir, 'tests', 'second.e2e.ts'), `import { test } from 'e2e';\ntest('second', async () => {});\n`);
+      const owed = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(owed.exitCode).toBe(0);
+      expect(owed.results.filter((result) => result.selected).map((result) => result.test.title)).toEqual(['second']);
+      expect(owed.report.run.carried).toBeUndefined();
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    '--last-failed carries a failed hook another filter kept from running again, until its scope runs',
+    async () => {
+      const hooks = (teardown: string) => `import { test } from 'e2e';
+test.afterAll(() => {
+  ${teardown}
+});
+test('in the hook scope', async () => {});
+`;
+      const project = createProject({
+        'tests/hooks.e2e.ts': hooks(`throw new Error('teardown broke');`),
+        'tests/body.e2e.ts': `import { test } from 'e2e';\ntest('body', async () => {\n  throw new Error('still broken');\n});\n`,
+      });
+      const ran = (outcome: RunOutcome) => outcome.results.filter((result) => result.selected).map((result) => [result.test.title, result.status]);
+      const hookScope = { file: 'tests/hooks.e2e.ts', targetId: 'web', titlePath: [] };
+
+      const first = await runExisting(project, { appUrl: app.url });
+      expect(first.exitCode).toBe(1);
+
+      writeFileSync(path.join(project.dir, 'tests', 'body.e2e.ts'), `import { test } from 'e2e';\ntest('body', async () => {});\n`);
+      const narrowed = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true, grep: [/body/] } });
+      expect(narrowed.exitCode).toBe(0);
+      expect(ran(narrowed)).toEqual([['body', 'passed']]);
+      expect(narrowed.report.run.errors).toEqual([]);
+      expect(narrowed.report.run.carried?.results.map((result) => result.titlePath.at(-1))).toEqual(['in the hook scope']);
+      expect(narrowed.report.run.carried?.errors.map((error) => [error.code, error.phase, error.scope])).toEqual([['HOOK_FAILED', 'afterAll', hookScope]]);
+      assertValidReport(narrowed.report);
+
+      // The scope runs again and the hook still fails: reported by the run itself, carried no more.
+      const again = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(again.exitCode).toBe(1);
+      expect(ran(again)).toEqual([['in the hook scope', 'passed']]);
+      expect(again.report.run.errors.map((error) => [error.code, error.scope])).toEqual([['HOOK_FAILED', hookScope]]);
+      expect(again.report.run.carried).toBeUndefined();
+
+      writeFileSync(path.join(project.dir, 'tests', 'hooks.e2e.ts'), hooks(''));
+      const fixed = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(fixed.exitCode).toBe(0);
+      expect(ran(fixed)).toEqual([['in the hook scope', 'passed']]);
+      expect(fixed.report.run.carried).toBeUndefined();
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
     '--last-failed runs a setup whose afterAll failed again through the tests that consume its session',
     async () => {
       const auth = (teardown: string) => `import { test } from 'e2e';
@@ -1100,12 +1303,19 @@ test('unrelated', async () => {
       writeFileSync(path.join(project.dir, 'tests', 'other.e2e.ts'), `import { test } from 'e2e';
 test('unrelated', async () => {});
 `);
+      // A rerun that needs none of the setup's sessions carries its failed afterAll, with no row for the setup.
+      const narrowed = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true, grep: [/unrelated/] } });
+      expect(narrowed.exitCode).toBe(0);
+      expect(ran(narrowed)).toEqual([['unrelated', 'passed']]);
+      expect(narrowed.report.run.carried?.results.map((result) => [result.kind, result.titlePath.at(-1)])).toEqual([['setup', 'sign in']]);
+      expect(narrowed.report.run.carried?.errors.map((error) => error.code)).toEqual(['HOOK_FAILED']);
+      assertValidReport(narrowed.report);
+
       const second = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
       expect(second.exitCode).toBe(1);
       expect(ran(second)).toEqual([
         ['sign in', 'passed'],
         ['signed in', 'passed'],
-        ['unrelated', 'passed'],
       ]);
       expect(second.report.run.errors.map((error) => error.code)).toEqual(['HOOK_FAILED']);
 

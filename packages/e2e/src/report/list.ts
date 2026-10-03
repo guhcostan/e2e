@@ -11,7 +11,7 @@ import picocolors from 'picocolors';
 import type { SerializedError } from '../internal/errors.ts';
 import { packageVersion } from '../internal/package-version.ts';
 import type { RunEvent, RunEventFact, RunEventOf, RunEventResult, SetupStep } from '../run/events.ts';
-import type { ArtifactRecord, AttemptRecord, FailureEvidence, ResultStatus, SerialGroupRecord } from '../run/records.ts';
+import { failureBeforeSkip, type ArtifactRecord, type AttemptRecord, type FailureEvidence, type ResultStatus, type SerialGroupRecord } from '../run/records.ts';
 import type { Reporter, ReporterSummary } from '../types.ts';
 import { codeFrame, userFrame } from './code-frame.ts';
 import {
@@ -116,14 +116,16 @@ interface ResultDetails {
 /** Details of an ordinary result: summed over its attempts, the error from the last. */
 function attemptDetails(attempts: readonly AttemptRecord[]): ResultDetails {
   const steps = attempts.map((attempt) => attempt.steps);
+  // A retry the run interrupted tells nothing; the failure before it is the verdict.
+  const told = attempts.findLast((attempt) => attempt.status !== 'interrupted') ?? attempts.at(-1);
   return {
     durationMs: attempts.reduce((total, attempt) => total + attempt.durationMs, 0),
     usage: stepsUsage(steps),
     models: stepsModelTally(steps),
     cache: stepsCacheTally(steps),
-    error: attempts[attempts.length - 1]?.error,
+    error: told?.error,
     videos: videoPaths(attempts),
-    ...failureOf(attempts[attempts.length - 1]),
+    ...failureOf(told),
   };
 }
 
@@ -161,7 +163,7 @@ function serialMemberDetails(group: SerialGroupRecord, testId: string): ResultDe
     attempt,
     member: attempt.members.find((member) => member.testId === testId),
   }));
-  const last = runs[runs.length - 1];
+  const last = runs.findLast((run) => run.attempt.status !== 'interrupted') ?? runs.at(-1);
   const own = last?.member;
   const neverRan = own === undefined || own.status === 'skipped';
   const steps = runs.map((run) => run.member?.steps ?? []);
@@ -177,7 +179,7 @@ function serialMemberDetails(group: SerialGroupRecord, testId: string): ResultDe
   };
 }
 
-/** One failed pair, held for the `Failed Tests` section. */
+/** One failed pair, held for the `Failed Tests` section, or a skipped one for `Skipped After Failure`. */
 interface Failure {
   readonly group: FileGroup;
   readonly title: string;
@@ -224,6 +226,7 @@ export class ListReporter implements Reporter {
   /** Whether a live window paints; without one, finished steps stream permanently. */
   private readonly live: boolean;
   private readonly failures: Failure[] = [];
+  private readonly skippedFailures: Failure[] = [];
   /** Every finished test's run, for the `Repeats` summary of a `--repeat-each` run. */
   private readonly runs: { key: string; label: string; run: RepeatRun }[] = [];
   /**
@@ -648,15 +651,17 @@ export class ListReporter implements Reporter {
     const steps = this.pairs.get(key)?.steps ?? [];
     this.pairs.delete(key);
     const group = this.group(result.test.file, result.target.name);
+    // Read before `detailsOf` releases the result's serial group.
+    const skippedAfter = failureBeforeSkip(result, (id) => this.pendingSerial.get(id)?.group);
     const { durationMs, usage, models, cache, error, videos, failure, screenPath } = this.detailsOf(result);
     addUsage(this.runUsage, usage);
     addModelTally(this.runModels, models);
     addCacheTally(this.runCache, cache);
     const title = this.titledAs(result.test.titlePath.join(' > '), result.agent, result.repeat);
     if (this.explore !== undefined) {
-      // The exploration's verdict is its findings; any other error is a failure of its own.
+      // The exploration's verdict is its findings; any other error is a failure of its own, unless the run stopped it.
       this.explore.result(result.attempts.flatMap((attempt) => attempt.artifacts));
-      if (error !== undefined && !this.explore.isVerdict(error)) {
+      if (error !== undefined && result.status !== 'interrupted' && !this.explore.isVerdict(error)) {
         this.failures.push({ group, title, status: result.status, error, videos, failure, screenPath });
       }
       this.window.redraw();
@@ -681,6 +686,9 @@ export class ListReporter implements Reporter {
     });
     if (statusBucket(result.status) === 'failed') {
       this.failures.push({ group, title, status: result.status, error, videos, failure, screenPath });
+    }
+    if (skippedAfter !== undefined) {
+      this.skippedFailures.push({ group, title, status: result.status, error: skippedAfter.error, videos, ...failureOf(skippedAfter) });
     }
     if (group.planned !== undefined && group.lines.length >= group.planned) this.printGroup(group);
     this.window.redraw();
@@ -721,12 +729,15 @@ export class ListReporter implements Reporter {
     const symbol =
       outcome === 'failed'
         ? pc.red(F_POINTER)
-        : outcome === 'skipped'
-          ? pc.dim(pc.gray(F_DOWN))
-          : pc.green(F_CHECK);
+        : outcome === 'interrupted'
+          ? pc.yellow(F_POINTER)
+          : outcome === 'skipped'
+            ? pc.dim(pc.gray(F_DOWN))
+            : pc.green(F_CHECK);
     const state = [
       pc.dim(`${counts.total} test${counts.total === 1 ? '' : 's'}`),
       counts.failed > 0 ? pc.red(`${counts.failed} failed`) : undefined,
+      counts.interrupted > 0 ? pc.yellow(`${counts.interrupted} interrupted`) : undefined,
       counts.flaky > 0 ? pc.yellow(`${counts.flaky} flaky`) : undefined,
       counts.skipped > 0 ? pc.yellow(`${counts.skipped} skipped`) : undefined,
     ]
@@ -744,6 +755,7 @@ export class ListReporter implements Reporter {
     this.print(parts.join(' '));
     const verbose =
       counts.failed > 0 ||
+      counts.interrupted > 0 ||
       counts.flaky > 0 ||
       this.groups.size === 1 ||
       (this.live && group.lines.some((line) => line.steps.length > 0));
@@ -774,6 +786,8 @@ export class ListReporter implements Reporter {
             : pc.dim(pc.gray(` [${line.skipReason}]`));
         return [`   ${pc.dim(pc.gray(F_DOWN))} ${line.title}${reason}`];
       }
+      case 'interrupted':
+        return [`   ${pc.yellow(F_CROSS)} ${line.title} ${pc.yellow('(interrupted)')} ${duration}${ai}`];
       default: {
         const status = line.status === 'failed' ? '' : pc.red(` (${line.status})`);
         const rows = [`   ${pc.red(`${F_CROSS} ${line.title}`)}${status} ${duration}${ai}`];
@@ -812,6 +826,9 @@ export class ListReporter implements Reporter {
     const cache = cacheText(pc, this.runCache);
     if (cache !== undefined) rows.push(padTitle(pc, 'Cache') + cache);
     if (final) rows.push(...this.repeatRows());
+    if (this.skippedFailures.length > 0) {
+      rows.push(padTitle(pc, 'Warnings') + pc.yellow(`${this.skippedFailures.length} skipped after failure`));
+    }
     if (this.errors.length > 0) {
       const count = this.errors.length;
       rows.push(padTitle(pc, 'Errors') + pc.bold(pc.red(`${count} error${count === 1 ? '' : 's'}`)));
@@ -832,11 +849,12 @@ export class ListReporter implements Reporter {
     const { pc } = this;
     const groups = repeatGroups(this.runs, (entry) => entry);
     if (groups.length === 0) return [];
-    const unstable = groups.filter((group) => group.passed < group.runs.length);
+    // A test is listed when it missed a run: a flake first, then one the run cut short.
+    const missed = groups.filter((group) => group.passed < group.runs.length).toSorted((a, b) => Number(b.unstable) - Number(a.unstable));
     const summary = repeatSummary(groups);
     return [
-      padTitle(pc, 'Repeats') + (unstable.length === 0 ? pc.green(summary) : pc.yellow(summary)),
-      ...unstable.map((group) => `${padTitle(pc, '')}${pc.yellow(F_CROSS)} ${group.label}  ${pc.dim(repeatLine(group))}`),
+      padTitle(pc, 'Repeats') + (missed.some((group) => group.unstable) ? pc.yellow(summary) : pc.green(summary)),
+      ...missed.map((group) => `${padTitle(pc, '')}${group.unstable ? pc.yellow(F_CROSS) : pc.dim(pc.gray(F_DOWN))} ${group.label}  ${pc.dim(repeatLine(group))}`),
     ];
   }
 
@@ -903,15 +921,15 @@ export class ListReporter implements Reporter {
   }
 
   /** vitest's `Failed Tests` section: a banner, then each failure with its code frame. */
-  private printFailures(): void {
+  private printFailures(heading: string, failures: readonly Failure[]): void {
     const { pc } = this;
-    if (this.failures.length === 0) return;
+    if (failures.length === 0) return;
     this.print('');
-    this.print(this.errorBanner(`Failed Tests ${this.failures.length}`));
+    this.print(this.errorBanner(`${heading} ${failures.length}`));
     this.print('');
-    this.failures.forEach(({ group, title, status, error, videos, failure, screenPath }, index) => {
+    failures.forEach(({ group, title, status, error, videos, failure, screenPath }, index) => {
       this.print(
-        `${pc.bold(pc.bgRed(' FAIL '))} ${this.badge(group.target)} ${bounded(group.file)}${this.separator}${title}`,
+        `${pc.bold(pc.bgRed(status === 'skipped' ? ' SKIP ' : ' FAIL '))} ${this.badge(group.target)} ${bounded(group.file)}${this.separator}${title}`,
       );
       if (error === undefined) {
         this.print(pc.red(`${pc.bold(status)}: no error was recorded`));
@@ -923,7 +941,7 @@ export class ListReporter implements Reporter {
       }
       this.printEvidence(failure, screenPath);
       this.printVideos(videos);
-      const marker = `[${index + 1}/${this.failures.length}]`;
+      const marker = `[${index + 1}/${failures.length}]`;
       const { before, after } = rule(marker, 'right');
       this.print('');
       this.print(pc.red(pc.dim(`${before}${marker}${after}`)));
@@ -1020,7 +1038,8 @@ export class ListReporter implements Reporter {
       if (!group.printed && group.lines.length > 0) this.printGroup(group);
     }
     this.printExplore();
-    this.printFailures();
+    this.printFailures('Failed Tests', this.failures);
+    this.printFailures('Skipped After Failure', this.skippedFailures);
     this.printErrors();
     this.print('');
     for (const row of this.summaryRows(true)) this.print(row);

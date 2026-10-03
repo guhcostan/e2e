@@ -3,7 +3,7 @@
  * stitching, and element-handle bookkeeping the surface keeps per generation.
  */
 
-import type { ElementHandle, Frame, JSHandle } from 'playwright';
+import type { ElementHandle, Frame, JSHandle } from 'playwright-core';
 import {
   EngineError,
   sameSite,
@@ -228,7 +228,7 @@ async function captureInto(
  *
  * A `data:` document is *not* admitted, even though its bytes are written by the
  * page that embeds it. It has an opaque origin rather than an inherited one, and
- * navigation denies the scheme by name alongside `file:` and `javascript:`.
+ * navigation admits only http(s) and `about:blank`.
  */
 function isOnSiteFrame(url: string, site: string | undefined): boolean {
   if (url === '' || url === 'about:blank' || url === 'about:srcdoc') return true;
@@ -295,7 +295,7 @@ function assembleTree(
     // bordered iframe is off by its border width, which is within a tap
     // target. A frame under a CSS transform is not unwound: its boxes are
     // where the untransformed frame would put them.
-    if (embedded !== undefined) childLists[index]!.unshift(placeInFrame(embedded, raw.rect));
+    if (embedded !== undefined && raw.rect !== null) childLists[index]!.unshift(placeInFrame(embedded, raw.rect));
     const node = toSemanticNode({ id: ids[index]!, revision: '' }, raw, childLists[index]!, framePath);
     built[index] = node;
     if (raw.parent >= 0) childLists[raw.parent]!.unshift(node);
@@ -355,7 +355,7 @@ export function toSemanticNode(
     states,
     ...(raw.level !== null ? { level: raw.level } : {}),
     attributes: raw.attributes,
-    rect: raw.rect,
+    ...(raw.rect !== null ? { rect: raw.rect } : {}),
     ...(framePath.length > 0 ? { framePath } : {}),
     ...(children.length > 0 ? { children } : {}),
   };

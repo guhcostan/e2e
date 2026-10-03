@@ -1,16 +1,32 @@
 /** LocatorExpression -> Playwright locator projection. */
 
-import type { FrameLocator, Locator as PwLocator, Page } from 'playwright';
+import type { FrameLocator, Locator as PwLocator, Page } from 'playwright-core';
 import { EngineError, type LocatorExpression, type SemanticQuery, type TextPattern } from 'e2e/engine';
 import { SEARCH_ROOTS_SELECTOR_ENGINE } from './closed-shadow.ts';
 import { exactLabelSelector } from './label-selector.ts';
 import { SECURE_FIELD_SELECTOR } from './read-node.ts';
+import { SHOWN_SELECTOR } from './shown-selector.ts';
 
 type PwScope = Page | FrameLocator | PwLocator;
 
 function patternToPw(pattern: TextPattern): string | RegExp {
-  if (pattern.kind === 'regexp') return new RegExp(pattern.source, pattern.flags);
+  if (pattern.kind === 'regexp') return selectorSafeRegExp(new RegExp(pattern.source, pattern.flags));
   return pattern.value;
+}
+
+/**
+ * A RegExp Playwright can write into a selector as is. Playwright escapes the
+ * quotes and `>>` of a RegExp it writes into a selector, except under the `u`
+ * or `v` flag, where `\'` is a syntax error: a bare quote there opens a
+ * string that swallows every part chained after it. A quote or the second `>`
+ * of `>>` becomes the hex escape the flag accepts, matching the same text.
+ */
+function selectorSafeRegExp(re: RegExp): RegExp {
+  if (!/[uv]/.test(re.flags)) return re;
+  const source = re.source
+    .replace(/["'`]/g, (quote) => `\\x${quote.charCodeAt(0).toString(16)}`)
+    .replace(/>>/g, '>\\x3e');
+  return source === re.source ? re : new RegExp(source, re.flags);
 }
 
 function patternExact(pattern: TextPattern): boolean {
@@ -28,7 +44,7 @@ function testIdSelector(attribute: string, pattern: TextPattern): string {
   const name = attribute.includes(',') ? JSON.stringify(attribute) : attribute;
   const value =
     pattern.kind === 'regexp'
-      ? escapeRegexForSelector(new RegExp(pattern.source, pattern.flags))
+      ? escapeRegexForSelector(selectorSafeRegExp(new RegExp(pattern.source, pattern.flags)))
       : `"${pattern.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"s`;
   return `internal:testid=[${name}=${value}]`;
 }
@@ -48,8 +64,12 @@ function escapeRegexForSelector(re: RegExp): string {
  */
 const ARIA_ROLE_BY_CONTRACT_ROLE: Readonly<Record<string, string>> = { image: 'img' };
 
-/** Every control that carries a current value: the candidates of a display-value query. */
-const VALUED_SELECTOR = 'input, textarea, select';
+/**
+ * Every control that displays a current value: the candidates of a
+ * display-value query. A checkbox or radio carries a value it never shows
+ * (`on` by default), so it is no candidate.
+ */
+const VALUED_SELECTOR = 'input:not([type="checkbox" i]):not([type="radio" i]), textarea, select';
 
 /**
  * How one query kind reaches its nodes across the roots it searches: its
@@ -87,7 +107,7 @@ function glyphTolerantName(name: string, exact: boolean): RegExp {
     .split(/\s+/)
     .map((word) => word.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
     .join(`${GLYPH_OR_SPACE}+`);
-  return exact ? new RegExp(`^${GLYPH_OR_SPACE}*${body}${GLYPH_OR_SPACE}*$`, 'u') : new RegExp(body, 'iu');
+  return selectorSafeRegExp(exact ? new RegExp(`^${GLYPH_OR_SPACE}*${body}${GLYPH_OR_SPACE}*$`, 'u') : new RegExp(body, 'iu'));
 }
 
 /**
@@ -165,20 +185,11 @@ export type PostStep =
   | { readonly kind: 'filter'; readonly options: PwFilterOptions };
 
 /**
- * Self-selector for the part of the semantic `hidden` state Playwright's own
- * visibility filter does not read: `aria-hidden` on the element itself.
- */
-const NOT_ARIA_HIDDEN = ':scope:not([aria-hidden="true"])';
-
-/**
  * A `visible` query narrows its candidates inside the selector, before any
- * enclosing scope, filter, or index runs: Playwright's visibility predicate
- * (layout box, `display`, `visibility`) plus the `aria-hidden` check the
- * semantic `hidden` state also makes. An indexed, filtered, or scoping visible
- * query therefore never selects or retains a node that state calls hidden.
- * The surface additionally holds a terminal query to the batch-read `hidden`
- * state, which reads the same box, style, and `details` facts Playwright's
- * predicate does, so a direct query agrees with `toBeVisible()`.
+ * enclosing scope, filter, or index runs, by the reader's own `hidden` state
+ * (`e2e-shown`). An indexed, filtered, or scoping visible query therefore
+ * never selects or retains a node that state calls hidden, and the surface's
+ * hold of a terminal query to the batch-read state agrees with it.
  */
 function visibleQueryToPw(scope: PwScope, query: SemanticQuery, testIdAttribute: string): PwLocator {
   return narrowedToVisible(queryToPw(scope, query, testIdAttribute), query);
@@ -187,7 +198,7 @@ function visibleQueryToPw(scope: PwScope, query: SemanticQuery, testIdAttribute:
 /** The visibility narrowing above, on a locator already built for `query`; identity unless the query is `visible`. */
 function narrowedToVisible(located: PwLocator, query: SemanticQuery): PwLocator {
   if (query.visible !== true) return located;
-  return located.filter({ visible: true }).locator(NOT_ARIA_HIDDEN);
+  return located.locator(SHOWN_SELECTOR);
 }
 
 export interface ProjectedLocator {

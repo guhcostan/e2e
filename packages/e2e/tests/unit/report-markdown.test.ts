@@ -506,6 +506,44 @@ describe('renderMarkdownReport', () => {
     expect(renderMarkdownReport(page({ status: 'failed', results: [member] }))).toContain('**🔴 step two**  \n`tests/example.e2e.ts:3`\n\n**failed**\n');
   });
 
+  it('tells a serial member from the attempt that failed it when the interrupted retry skipped it', () => {
+    const member = named({ title: 'step two', status: 'failed', serialGroupId: 'g1' });
+    const memberRecord = (status: 'failed' | 'skipped') => ({
+      id: `m-${status}`,
+      index: 0,
+      testId: member.testId,
+      status,
+      startedAt: REPORT_AT,
+      durationMs: 40,
+      steps: status === 'failed' ? [step({ index: 0, label: 'tap Next', status: 'failed' })] : [],
+      ...(status === 'failed'
+        ? { error: { category: 'test' as const, code: 'ASSERTION_FAILED', message: 'nope', retryable: false } }
+        : { skip: { cause: 'serial-predecessor-failed' as const, reason: 'group attempt did not reach this member' } }),
+      secondaryErrors: [],
+    });
+    const group: ReportSerialGroup = {
+      id: 'g1',
+      serialId: 'g1',
+      declarationIndex: 0,
+      file: member.file,
+      source: member.source,
+      titlePath: ['group'],
+      targetId: 'web',
+      platform: 'web',
+      agent: 'default',
+      repeat: 0,
+      memberTestIds: [member.testId],
+      status: 'failed',
+      attempts: [
+        { ...attempt({ status: 'failed' }), members: [memberRecord('failed')] },
+        { ...attempt({ status: 'interrupted', error: { code: 'INTERRUPTED', message: 'run interrupted in phase body' } }), members: [memberRecord('skipped')] },
+      ],
+    };
+    const body = renderMarkdownReport(page({ status: 'interrupted', results: [member], serialGroups: [group] }));
+    expect(body).toContain('**ASSERTION_FAILED** at step 1 of 1: `screen.tap tap Next`');
+    expect(body).not.toContain('INTERRUPTED');
+  });
+
   it('counts zero failed attempts for a flaky test a foreign document gives one attempt, never a negative', () => {
     const oneAttempt = named({ title: 'odd', status: 'flaky', attempts: [attempt({ status: 'passed' })] });
     const body = renderMarkdownReport(page({ results: [oneAttempt] }));
@@ -717,6 +755,41 @@ describe('renderMarkdownReport evidence paths', () => {
   });
 });
 
+describe('an interrupted run', () => {
+  const cut = named({
+    title: 'cut short',
+    status: 'interrupted',
+    attempts: [attempt({ status: 'interrupted', error: { code: 'INTERRUPTED', message: 'run interrupted in phase body' } })],
+  });
+
+  it('counts an interrupted test apart from failures and gives it no failure block', () => {
+    const body = renderMarkdownReport(page({ status: 'interrupted', results: [passing, cut] }));
+    expect(body.startsWith('### ⏹️ e2e: 1 interrupted, 1 passed\n')).toBe(true);
+    expect(body).not.toContain('INTERRUPTED');
+    expect(body).toContain('| ⏹️ | cut short |');
+  });
+
+  it('tells the failure an interrupted retry was cut short after', () => {
+    const retried = named({
+      title: 'fails then gets cut',
+      status: 'failed',
+      attempts: [
+        attempt({ status: 'failed', error: { code: 'ASSERTION_FAILED', message: 'no cart' } }),
+        attempt({ status: 'interrupted', error: { code: 'INTERRUPTED', message: 'run interrupted in phase body' } }),
+      ],
+    });
+    const body = renderMarkdownReport(page({ status: 'interrupted', results: [retried] }));
+    expect(body.startsWith('### 🔴 e2e: 1 failed\n')).toBe(true);
+    expect(body).toContain('**ASSERTION_FAILED**');
+    expect(body).not.toContain('**INTERRUPTED**');
+  });
+
+  it('stays red when the run failed before it was stopped', () => {
+    const body = renderMarkdownReport(page({ status: 'interrupted', results: [failing, cut] }));
+    expect(body.startsWith('### 🔴 e2e: 1 failed, 1 interrupted\n')).toBe(true);
+  });
+});
+
 describe('markdownReporter', () => {
   const dirs: string[] = [];
   afterAll(() => {
@@ -771,6 +844,15 @@ describe('markdownReporter', () => {
     expect(text.startsWith('# ✗ members › an email invitation is accepted by the invited account only\n')).toBe(true);
     expect(text).toContain('## Steps');
     expect(text).toContain('- screenshot `.e2e/artifacts/t/attempt-0/screenshot-1.bin`');
+  });
+
+  it('writes no page for an interrupted test, which reached no verdict', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'e2e-markdown-'));
+    dirs.push(root);
+    const cut = named({ title: 'cut short', status: 'interrupted', attempts: [attempt({ status: 'interrupted' })] });
+    const rows = await markdownReporter.onRunFinished!(finished(page({ status: 'interrupted', results: [passing, cut] }), root), new AbortController().signal);
+    expect(rows).toEqual([{ label: 'Markdown', text: path.join('.e2e', 'summary.md') }]);
+    expect(readdirSync(path.join(root, '.e2e'))).toEqual(['summary.md']);
   });
 
   it('writes nothing when the report itself was not written', async () => {

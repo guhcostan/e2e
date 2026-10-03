@@ -6,13 +6,11 @@
 - ES modules: `.ts` config, tests, helpers, and workspace packages exporting
   `.ts` source load as ESM regardless of the nearest `package.json` `type`
   (CommonJS packages need no change); never `require` or `module.exports`.
-- Browser tests: `@e2e-dev/web` plus `playwright` (`>=1.63.0 <2`), a peer the
-  engine does not install: an existing Playwright keeps its version and
-  browser cache, one out of range fails install as an unmet peer (npm's
-  `ERESOLVE`): upgrade `playwright` within the range. Missing
-  browsers download on first boot; in CI run `npx playwright install chromium
-  --with-deps`. Mobile tests: `@e2e-dev/mobile`, pinning `agent-device`
-  exactly; the pin moves with each engine release.
+- Browser tests: `@e2e-dev/web`, pinning `playwright-core` exactly; do not
+  add `playwright` for it. Missing browsers download on first boot; in CI run
+  `npx @e2e-dev/web install chromium --with-deps` (pnpm: `pnpm exec e2e-web
+  install chromium --with-deps`). Mobile tests: `@e2e-dev/mobile`, pinning
+  `agent-device` exactly; each pin moves with its engine release.
 
 ## Scaffold
 
@@ -41,7 +39,7 @@ MCP entries.
 Without the wizard (`ai`, Vercel AI SDK v7, only for `agent.*` steps):
 
 ```bash
-npm install --save-dev e2e @e2e-dev/web playwright ai@^7
+npm install --save-dev e2e @e2e-dev/web ai@^7
 ```
 
 ## Subscriptions and API keys
@@ -53,6 +51,7 @@ key, or a local endpoint. Authenticate:
 | --- | --- |
 | ChatGPT Plus or Pro | `npx e2e login openai` |
 | GitHub Copilot | `npx e2e login github-copilot` (GitHub CLI signed in, or your own `--client-id`) |
+| OpenCode Console (OpenCode Zen and OpenCode Go) | `npx e2e login opencode-console` (approve the device code, pick the workspace) |
 | SuperGrok or X Premium+ | `npx e2e login spacexai` |
 | Vercel AI Gateway | Set `AI_GATEWAY_API_KEY`, or sign in to the Vercel CLI and `npx vercel link`; without the key `gateway()` uses a Vercel OIDC token |
 | OpenRouter | Set `OPENROUTER_API_KEY` |
@@ -62,6 +61,22 @@ Switching an existing config to ChatGPT: install `ai` and `@ai-sdk/openai`,
 set `model: chatgpt('gpt-6-luna')` from `e2e/oauth/chatgpt`, run `npx e2e
 login openai`. `npx e2e models` lists the ids each login serves. Use API keys
 in CI.
+
+Switching to Copilot: install `ai`, `@ai-sdk/openai-compatible`, and
+`@ai-sdk/openai`, set `model: copilot('<id>')` from `e2e/oauth/copilot`, run
+`npx e2e login github-copilot`. `copilot()` calls a model over chat completions, or
+over Copilot's Responses API when the plan serves that model only there, choosing
+per model from the plan's listing. `npx e2e models github-copilot` marks the models
+it cannot call at all: those served only over an API `copilot()` does not speak, and
+those the plan has not enabled.
+
+Switching to OpenCode Console: install `ai`, `@ai-sdk/openai-compatible`,
+`@ai-sdk/openai`, `@ai-sdk/anthropic`, and `@ai-sdk/google`, set
+`model: opencodeConsole('<id>')` from `e2e/oauth/opencode-console`, run
+`npx e2e login opencode-console`. A bare id is an OpenCode Zen model; a `go/` id
+(`go/deepseek-v4.1-flash`) is an OpenCode Go model and needs the workspace's Go
+subscription. `npx e2e models opencode-console` lists the ids, tagged Zen or Go. In CI,
+set a Console service account key as `OPENCODE_API_KEY`.
 
 ## The config
 
@@ -168,6 +183,8 @@ start a script that brings them up and serves the app.
 | `headers` | Sent to the app's site only (Vercel's `x-vercel-protection-bypass`, ngrok's `ngrok-skip-browser-warning`), `agent.act` included; disables the browser HTTP cache and service workers. |
 | `basicAuth` | `{ username, password }` for a `401` challenge; `password` may be `secrets.get('name')`, resolved per attempt and redacted like any secret, the base64 `Authorization` credential too. |
 | `userAgent` | The `User-Agent` every attempt sends and `navigator.userAgent` reports. |
+| `locale`, `timezoneId` | The language (`'de-DE'`: `navigator.language`, `Intl`, `Accept-Language`) and IANA time zone (`'Europe/Berlin'`) every attempt runs in. |
+| `initScripts` | Scripts every document runs before the page's own: source, `{ path }`, or a function with no closures. |
 | `testIdAttribute` | What `getByTestId` reads; default `data-testid`. |
 | `screencast` | `{ size?, quality? }` for the engine's own video: frame size (default the viewport's), JPEG quality 0 to 100. |
 
@@ -176,7 +193,7 @@ start a script that brings them up and serves the app.
   the handle (a reference, not the value) in `app.command.env`, a template
   literal, or `context`; read those from `process.env`.
 - `reconnectEndpoint` or an attempt-scoped provider rides one persistent
-  context without `headers`, `basicAuth`, `userAgent`, `app.clearState()`, or
+  context without `headers`, `basicAuth`, `userAgent`, `locale`, `timezoneId`, `app.clearState()`, or
   session state. Recovery never repeats a dispatched operation; exhausting
   the budget is `OPERATION_TIMEOUT`. Without `reconnectEndpoint` a dropped
   connection is reacquired at the next attempt.
@@ -246,7 +263,7 @@ For an app started elsewhere, point `app.url` at it, literally or via
 | --- | --- |
 | `AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, ... | Read by provider packages, not the runner. |
 | `E2E_USER_<NAME>_USERNAME`, `E2E_USER_<NAME>_PASSWORD` | Override `credentials.<name>`; `<NAME>` is the name uppercased, other characters `_`. |
-| `E2E_SECRET_<NAME>` | Overrides `secrets.<name>`, same rule. |
+| `E2E_SECRET_<NAME>` | Overrides `secrets.<name>`, same rule. Two entries of one namespace mapping to one variable are `INVALID_CONFIG`. |
 | `CI` | CI defaults; list in topic `running`. |
 | `E2E_TELEMETRY_DISABLED`, `DO_NOT_TRACK` | Disable anonymous telemetry, as does `e2e telemetry disable`; `E2E_TELEMETRY_DEBUG=1` prints events instead of sending. |
 

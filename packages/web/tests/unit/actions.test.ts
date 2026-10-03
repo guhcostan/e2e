@@ -5,7 +5,7 @@
  * support.ts).
  */
 
-import type { Locator as PwLocator, Page } from 'playwright';
+import type { Locator as PwLocator, Page } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
 import { EngineError, type LocatorAction } from 'e2e/engine';
 import { TestError } from 'e2e/engine';
@@ -137,8 +137,6 @@ function stubLocator(box = { x: 10, y: 20, width: 200, height: 100 }) {
     dblclick: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
-    check: vi.fn(async () => undefined),
-    uncheck: vi.fn(async () => undefined),
     hover: vi.fn(async () => undefined),
     focus: vi.fn(async () => undefined),
     scrollIntoViewIfNeeded: vi.fn(async () => undefined),
@@ -165,8 +163,6 @@ describe('dispatchLocatorAction', () => {
     [{ kind: 'fill', value: 'hunter2', sensitive: true }, 'fill', ['hunter2', { timeout: 7 }]],
     [{ kind: 'clear' }, 'fill', ['', { timeout: 7 }]],
     [{ kind: 'press', key: 'Enter' }, 'press', ['Enter', { timeout: 7 }]],
-    [{ kind: 'check' }, 'check', [{ timeout: 7 }]],
-    [{ kind: 'uncheck' }, 'uncheck', [{ timeout: 7 }]],
     [{ kind: 'focus' }, 'focus', [{ timeout: 7 }]],
     [{ kind: 'hover' }, 'hover', [{ timeout: 7 }]],
     [{ kind: 'scrollIntoView' }, 'scrollIntoViewIfNeeded', [{ timeout: 7 }]],

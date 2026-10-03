@@ -5,7 +5,7 @@
  * entry here.
  */
 
-export type GatewayId = 'vercel' | 'openrouter' | 'openai-compatible' | 'chatgpt' | 'copilot' | 'grok';
+export type GatewayId = 'vercel' | 'openrouter' | 'openai-compatible' | 'chatgpt' | 'copilot' | 'opencode-console' | 'grok';
 
 export interface GatewayPreset {
   readonly id: GatewayId;
@@ -69,11 +69,21 @@ export const GATEWAYS: readonly GatewayPreset[] = [
     id: 'copilot',
     label: 'GitHub Copilot subscription',
     hint: 'your Copilot plan: OpenAI, Anthropic, Google, and SpaceXAI models',
-    dependencies: { '@ai-sdk/openai-compatible': '^3.0.0' },
+    dependencies: { '@ai-sdk/openai-compatible': '^3.0.0', '@ai-sdk/openai': '^4.0.0' },
     import: "import { copilot } from 'e2e/oauth/copilot';",
     comment: 'Your GitHub Copilot subscription serves the model; sign in once with `e2e login github-copilot`, `e2e models github-copilot` lists the ids.',
     login: 'github-copilot',
     model: () => "copilot('claude-sonnet-5')",
+  },
+  {
+    id: 'opencode-console',
+    label: 'OpenCode Console',
+    hint: 'the models your OpenCode Console workspace serves',
+    dependencies: { '@ai-sdk/openai-compatible': '^3.0.0', '@ai-sdk/openai': '^4.0.0', '@ai-sdk/anthropic': '^4.0.0', '@ai-sdk/google': '^4.0.0' },
+    import: "import { opencodeConsole } from 'e2e/oauth/opencode-console';",
+    comment: 'Your OpenCode Console workspace serves the model; sign in once with `e2e login opencode-console`, `e2e models opencode-console` lists the ids.',
+    login: 'opencode-console',
+    model: () => "opencodeConsole('deepseek-v4.1-flash')",
   },
   {
     id: 'grok',

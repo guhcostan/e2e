@@ -38,6 +38,7 @@ describe('the built declarations', () => {
   it.each([
     ['oauth/chatgpt.d.ts', 'chatgpt', 'ChatGptOptions'],
     ['oauth/copilot.d.ts', 'copilot', 'CopilotOptions'],
+    ['oauth/opencode-console.d.ts', 'opencodeConsole', 'OpencodeConsoleOptions'],
     ['oauth/grok.d.ts', 'grok', 'GrokOptions'],
   ])('%s declares a constructor of the model id alone', (file, constructor, options) => {
     const text = declaration(file);

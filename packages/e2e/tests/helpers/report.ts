@@ -122,7 +122,7 @@ export function reportDocument(overrides: Partial<Report1Document['run']> = {}):
       serialGroups: [],
       results: [],
       errors: [],
-      summary: { discovered: 0, selected: 0, executed: 0, passed: 0, failed: 0, flaky: 0, skipped: 0 },
+      summary: { discovered: 0, selected: 0, executed: 0, passed: 0, failed: 0, interrupted: 0, flaky: 0, skipped: 0 },
       limits: LIMITS,
       usage: {
         discoveredResults: 0,

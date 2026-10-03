@@ -81,6 +81,16 @@
           "targetId": "web"
         }
       }
-    ]
+    ],
+    "summary": {
+      "discovered": 1,
+      "selected": 1,
+      "executed": 1,
+      "passed": 0,
+      "failed": 0,
+      "interrupted": -1,
+      "flaky": 0,
+      "skipped": 0
+    }
   }
 }

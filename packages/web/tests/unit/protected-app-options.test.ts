@@ -1,5 +1,5 @@
 /**
- * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `screencast` options are checked at
+ * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, `locale`, `timezoneId`, `initScripts`, and `screencast` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { secrets } from 'e2e';
-import { web } from '../../src/index.ts';
+import { web, type WebOptions } from '../../src/index.ts';
 import { httpCredentials } from '../../src/protected-app.ts';
 
 describe('web({ headers })', () => {
@@ -106,6 +106,52 @@ describe('web({ userAgent })', () => {
   });
 });
 
+describe('web({ locale, timezoneId })', () => {
+  it('accepts a language tag and an IANA time zone', () => {
+    expect(() => web({ locale: 'de-DE', timezoneId: 'Europe/Berlin' })).not.toThrow();
+    expect(() => web({ locale: 'zh-Hant-TW', timezoneId: 'UTC' })).not.toThrow();
+    expect(() => web({ locale: 'de-DE-u-co-phonebk', timezoneId: 'US/Eastern' })).not.toThrow();
+    expect(() => web({ timezoneId: 'GMT' })).not.toThrow();
+  });
+
+  it('rejects a value that is no language tag or time zone', () => {
+    for (const locale of ['', 'not a locale', 'de_DE', 'und', 'x-private', 3]) {
+      expect(() => web({ locale: locale as string })).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(/BCP 47/) }));
+    }
+    for (const timezoneId of ['', 'Mars/Olympus_Mons', 'GMT+25', '+01:00', 'europe/berlin', 'utc', 3]) {
+      expect(() => web({ timezoneId: timezoneId as string })).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(/IANA time zone/) }));
+    }
+  });
+
+  it('rejects an accept-language header beside locale, which would override it on the app site only', () => {
+    expect(() => web({ locale: 'de-DE', headers: { 'Accept-Language': 'fr' } })).toThrowError(/conflict/);
+    expect(() => web({ locale: 'de-DE', headers: { 'x-preview': 'token' } })).not.toThrow();
+  });
+});
+
+describe('web({ initScripts })', () => {
+  it('accepts source, a path, and a function', () => {
+    expect(() => web({ initScripts: [] })).not.toThrow();
+    expect(() => web({ initScripts: ['window.x = 1', { path: 'shim.js' }, () => undefined] })).not.toThrow();
+  });
+
+  it('rejects anything else, naming the entry', () => {
+    const refused = (message: RegExp) => expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(message) });
+    const cases: [unknown, RegExp][] = [
+      ['window.x = 1', /must be an array of scripts/],
+      [[3], /\[0\] must be a string of source, a \{ path \}, or a function, got number/],
+      [['ok', null], /\[1\] must be a string of source.*got null/],
+      [[{ path: '' }], /\[0\] path must be a non-empty string/],
+      [[{ content: 'x' }], /\[0\] takes only path, got content/],
+      // oxlint-disable-next-line no-sparse-arrays -- the hole is the case
+      [['ok', , 'ok'], /\[1\] must be a string of source.*got undefined/],
+    ];
+    for (const [initScripts, message] of cases) {
+      expect(() => web({ initScripts: initScripts as NonNullable<WebOptions['initScripts']> })).toThrow(refused(message));
+    }
+  });
+});
+
 describe('web({ screencast })', () => {
   it('accepts a whole-pixel size and a 0-100 quality, each optional', () => {
     expect(() => web({ screencast: {} })).not.toThrow();
@@ -150,7 +196,7 @@ describe('web() option keys', () => {
       refused('web() has unknown key "viewprt"; did you mean "viewport"?'),
     );
     expect(() => web({ launchOptions: {} } as unknown as Parameters<typeof web>[0])).toThrow(
-      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, headers, basicAuth, testIdAttribute, userAgent'),
+      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, headers, basicAuth, testIdAttribute, userAgent, locale, timezoneId, initScripts'),
     );
   });
 

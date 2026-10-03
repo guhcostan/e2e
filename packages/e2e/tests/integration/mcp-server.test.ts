@@ -280,10 +280,10 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     expect(pointed.text).toContain('PIXEL_TAINTED');
     expect(pointed.text).not.toContain('Tapped');
 
-    for (const url of ['javascript:alert(1)', 'file:///etc/passwd']) {
+    for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'view-source:file:///etc/passwd', 'VIEW-SOURCE:http://example.test/', 'about:srcdoc']) {
       const denied = await call('navigate', { url });
       expect(denied.isError, url).toBe(true);
-      expect(denied.text.split('\n')[0]).toBe(`navigate ${url} failed: POLICY_DENIED: forbidden URL scheme: ${url.slice(0, url.indexOf(':') + 1)}`);
+      expect(denied.text.split('\n')[0]).toBe(`navigate ${url} failed: POLICY_DENIED: forbidden URL scheme: ${url.slice(0, url.indexOf(':') + 1).toLowerCase()}`);
       expect(denied.text).not.toContain('Navigated');
     }
 

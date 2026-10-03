@@ -72,6 +72,26 @@ describe.each(schemas)('%s schema', (name) => {
       }
     });
 
+    it('counts interrupted results in the summary apart from failed ones', () => {
+      const report = readJson('fixtures', 'report-v1.valid.json') as { run: { summary: Record<string, number> } };
+      expect(validate(report)).toBe(true);
+      delete report.run.summary['interrupted'];
+      expect(validate(report)).toBe(false);
+      expect(validate.errors).toEqual(expect.arrayContaining([expect.objectContaining({ keyword: 'required', params: { missingProperty: 'interrupted' } })]));
+    });
+
+    it('lets a --last-failed rerun carry results, serial groups, and hook failures, at least one result of them', () => {
+      const report = readJson('fixtures', 'report-v1.valid.json') as { run: { carried?: Record<string, unknown> } };
+      const carried = report.run.carried!;
+      expect((carried['results'] as unknown[]).length).toBeGreaterThan(0);
+      for (const bad of [{ results: [] }, { serialGroups: undefined }, { errors: undefined }, { results: [{}] }, { extra: true }]) {
+        report.run.carried = { ...carried, ...bad };
+        expect(validate(report), JSON.stringify(bad)).toBe(false);
+      }
+      delete report.run.carried;
+      expect(validate(report)).toBe(true);
+    });
+
     it('requires judgment evidence after a model call, while allowing capture failures before one', () => {
       const report = readJson('fixtures', 'report-v1.valid.json') as {
         run: { results: { attempts: { steps: { api: string; status: string; metrics: { modelCalls: number }; observationRevision?: string; explanation?: string }[] }[] }[] };

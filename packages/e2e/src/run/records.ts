@@ -160,6 +160,49 @@ export interface ResultRecord {
  */
 export type WireResultRecord = Omit<ResultRecord, 'target'>;
 
+/** The failure a runtime skip followed, with the evidence its attempt captured. */
+export interface FailureBeforeSkip {
+  readonly error: SerializedError;
+  readonly failure: FailureEvidence | undefined;
+  /** The failing attempt's artifacts; for a serial member, the group attempt's. */
+  readonly artifacts: readonly ArtifactRecord[];
+}
+
+/**
+ * The failure a test's `test.skip(...)` followed: the last attempt that
+ * failed before a skipped retry, or a soft failure the skipping attempt kept.
+ * Engine cleanup diagnostics after the skip are not one. A serial member's
+ * attempts live on its group, which `groupOf` looks up only for such a member.
+ */
+export function failureBeforeSkip(
+  result: Pick<ResultRecord, 'status' | 'skip' | 'attempts' | 'serialGroupId' | 'test'>,
+  groupOf: (id: string) => SerialGroupRecord | undefined,
+): FailureBeforeSkip | undefined {
+  if (result.status !== 'skipped' || result.skip?.cause !== 'explicit') return undefined;
+  const runs =
+    result.serialGroupId === undefined
+      ? result.attempts
+      : (groupOf(result.serialGroupId)?.attempts ?? []).flatMap((attempt) =>
+          attempt.members
+            .filter((member) => member.testId === result.test.id)
+            .map((member) => ({ ...member, artifacts: attempt.artifacts })),
+        );
+  for (const run of runs.toReversed()) {
+    const error = run.error ?? run.secondaryErrors.find((secondary) => secondary.phase !== 'cleanup');
+    if (error !== undefined) return { error, failure: run.failure, artifacts: run.artifacts };
+  }
+  return undefined;
+}
+
+/** Whether any skipped result followed a failure: what `failOnSkippedFailure` fails a run for. */
+export function someSkippedAfterFailure(
+  results: readonly ResultRecord[],
+  serialGroups: readonly SerialGroupRecord[],
+): boolean {
+  const groups = new Map(serialGroups.map((group) => [group.id, group]));
+  return results.some((result) => failureBeforeSkip(result, (id) => groups.get(id)) !== undefined);
+}
+
 /** Strips the live target from a result for transport. */
 export function encodeResult(record: ResultRecord): WireResultRecord {
   const { target: _target, ...rest } = record;

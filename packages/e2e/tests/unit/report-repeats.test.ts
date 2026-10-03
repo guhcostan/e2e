@@ -21,12 +21,24 @@ describe('repeat tally', () => {
       ],
       (entry) => entry,
     );
-    expect(groups.map((group) => [group.label, group.passed, group.runs.map((entry) => entry.repeat)])).toEqual([
-      ['pays', 1, [0, 1, 2]],
-      ['stable', 3, [0, 1, 2]],
+    expect(groups.map((group) => [group.label, group.passed, group.unstable, group.runs.map((entry) => entry.repeat)])).toEqual([
+      ['pays', 1, true, [0, 1, 2]],
+      ['stable', 3, false, [0, 1, 2]],
     ]);
     expect(repeatSummary(groups)).toBe('1 of 2 tests passed all 3 runs');
     expect(repeatLine(groups[0]!)).toBe('1/3 passed · repeat 1 ASSERTION_FAILED · repeat 2 flaky (STEP_TIMEOUT)');
+  });
+
+  it('counts a run the run interrupted or never started as a miss, not a flake', () => {
+    const groups = repeatGroups(
+      [run('cut', 0, 'passed'), run('cut', 1, 'interrupted', 'INTERRUPTED'), run('cut', 2, 'skipped'), run('flake', 0, 'passed'), run('flake', 1, 'failed', 'ASSERTION_FAILED')],
+      (entry) => entry,
+    );
+    expect(groups.map((group) => [group.label, group.passed, group.unstable])).toEqual([
+      ['cut', 1, false],
+      ['flake', 1, true],
+    ]);
+    expect(repeatLine(groups[0]!)).toBe('1/3 passed · repeat 1 interrupted · repeat 2 skipped');
   });
 
   it('is empty for a run that repeated nothing', () => {

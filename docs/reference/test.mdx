@@ -97,16 +97,23 @@ group titles and then the test's own, are a `COLLECTION_ERROR`.
 
 ## Members
 
-A skipped test never affects the exit code. With `test.only`, other tests
+A skipped test does not affect the exit code by default. With `test.only`, other tests
 are reported as `filtered`, and a CI run fails with `ONLY_IN_CI`.
 
 Call `test.skip(condition, reason)` inside a test for conditions you learn at
 runtime, such as a disabled feature flag. When the condition is true, the call
 throws: the body stops at that line, as Playwright's does, and the test is
 reported `skipped` with `reason`, with no retry. Nothing after the call runs.
-Steps before it stay in the report as they ran, but they do not decide the
-status: a failed `expect.soft` before the call is dropped. Hooks and fixtures still run their teardown. When the condition is
-a precondition, call it first, before any step.
+Steps before it stay in the report as they ran. Soft failures before the call
+remain in the attempt's `secondaryErrors`, and the CLI lists the test under
+`Skipped After Failure`. A failed attempt followed by a skip on retry appears
+there too, with its original error. Hooks and fixtures still run their teardown.
+When the condition is a precondition, call it first, before any step.
+
+Set [`failOnSkippedFailure: true`](/reference/config) to fail the run with exit
+code 1 when a runtime skip follows a failure in that test. The test remains
+`skipped` with its reason, and the skip does not trigger another retry. Clean
+skips and retries that pass are unaffected. The default is `false`.
 
 A setup test cannot skip because other tests depend on its sessions; the
 call fails with `INVALID_ARGUMENT`. Outside a test body, the conditional

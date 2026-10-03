@@ -11,14 +11,13 @@ seam with no privilege either way.
 ## Install
 
 ```bash
-npm install --save-dev e2e @e2e-dev/web playwright
+npm install --save-dev e2e @e2e-dev/web
 ```
 
-Bring your own Playwright: `playwright` is a peer dependency (`>=1.63.0 <2`),
-not something this package installs. An app that already depends on Playwright
-keeps its version, one copy in `node_modules`, and one browser cache. A version
-outside the range may be rejected by your package manager as an unmet peer
-(npm's `ERESOLVE`), so upgrade `playwright` within the range.
+This package depends on `playwright-core` pinned to an exact version, so the
+engine always runs the Playwright it was tested against. An app that depends
+on Playwright itself keeps its own copy; the two share a browser cache only
+when their versions match.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
@@ -41,7 +40,10 @@ target, so a test can `requires: ['browser']`. Browser options:
 `BrowserProvider` that leases hosted browsers, see below), `viewport`
 (`{ width, height }`; default 1280x720), `testIdAttribute` (the attribute
 `getByTestId` and a node's `testId` read; default `data-testid`), `userAgent`
-(the `User-Agent` every attempt sends and `navigator.userAgent` reports), and
+(the `User-Agent` every attempt sends and `navigator.userAgent` reports),
+`locale` and `timezoneId` (the language and time zone every attempt runs in,
+such as `de-DE` and `Europe/Berlin`), `initScripts` (scripts every document
+runs before the page's own), and
 `connect` — attach to a remote browser over CDP instead of launching a local
 one.
 
@@ -71,7 +73,7 @@ engine verifies the default context ID and active page target ID, clears stale
 references, and never repeats a dispatched operation. A missing target fails
 the attempt. The host owns deleting the remote browser after cleanup.
 
-This mode does not support `headers`, `basicAuth`, `userAgent`, context reset, or session
+This mode does not support `headers`, `basicAuth`, `userAgent`, `locale`, `timezoneId`, context reset, or session
 state capture and restore. Recording resumes after reconnect, but a segment
 lost during the disconnect remains unavailable. See the
 [Playwright reference](../../docs/reference/web.mdx#recovering-a-cdp-transport)
@@ -131,8 +133,12 @@ In CI, install browsers as their own step instead, so the cost is visible and
 cacheable:
 
 ```bash
-npx playwright install chromium --with-deps
+npx @e2e-dev/web install chromium --with-deps
 ```
+
+It downloads the browsers for the Playwright version this package pins, the
+ones the engine launches. Under pnpm, run the bin by name:
+`pnpm exec e2e-web install chromium --with-deps`.
 
 `--with-deps` also installs the system libraries a slim container image lacks.
 

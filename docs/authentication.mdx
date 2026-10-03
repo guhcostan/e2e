@@ -211,7 +211,9 @@ export default {
 ```
 
 `E2E_SECRET_<NAME>` overrides an entry per run, with the same uppercasing rule
-as credentials, so a CI job can supply the value without touching the config:
+as credentials, so a CI job can supply the value without touching the config.
+Two entries that map to one variable, like `stripe-key` and `stripe_key`, fail
+the config load with `INVALID_CONFIG`, as two such credentials do:
 
 <CodeGroup>
 ```bash npm

@@ -41,6 +41,8 @@ const DERIVED_GAP_SUMMARY = 'tool type (run-time value)';
 export interface TraceRecorderOptions {
   /** The run's secret redactor; applied to every recorded string. */
   readonly redact: (text: string) => string;
+  /** `redact` for a field cut at its observed limit (`SecretLedger.redactCut`). */
+  readonly redactCut: (text: string) => string;
   readonly maxActions?: number;
 }
 
@@ -48,10 +50,12 @@ export class TraceRecorder {
   private readonly actions: RecordedAction[] = [];
   private truncated = false;
   private readonly redact: (text: string) => string;
+  private readonly redactCut: (text: string) => string;
   private readonly maxActions: number;
 
   constructor(options: TraceRecorderOptions) {
     this.redact = options.redact;
+    this.redactCut = options.redactCut;
     this.maxActions = Math.min(options.maxActions ?? MAX_TRACE_ACTIONS, MAX_TRACE_ACTIONS);
   }
 
@@ -69,7 +73,7 @@ export class TraceRecorder {
 
   /** Records one committed grammar action. */
   record(action: RecordableAction): void {
-    this.push(this.toRecorded(action, describeAction(action, this.redact)));
+    this.push(this.toRecorded(action, describeAction(action, { redact: this.redact, redactCut: this.redactCut })));
     this.lastActionAt = Date.now();
   }
 
@@ -104,16 +108,19 @@ export class TraceRecorder {
     readonly summary: string;
     readonly startPath?: string;
     readonly endPath?: string;
-    /** Already projected and capped by `describeAnchors`; recorded as given. */
+    /** Already projected and capped by `describeDelta`; recorded as given. */
     readonly endAnchors?: readonly TraceTargetDescriptor[];
+    /** The other side of the same delta: what was on screen at the start and gone at the end. */
+    readonly goneAnchors?: readonly TraceTargetDescriptor[];
     /** How long the recorded run took to reach its end state, plus margin. */
     readonly endWaitMs?: number;
   }): ActionTrace | undefined {
     if (this.actions.length === 0) return undefined;
     const summary = bound(this.redact(conclusion.summary), MAX_TRACE_SUMMARY_CHARS);
-    // Anchors are replay preconditions, so they follow the input rule: a path
-    // the redactor alters carried a secret (a token in a query string) and
-    // the trace is marked non-replayable rather than storing it verbatim.
+    // Locations are replay preconditions, so they follow the input rule: a
+    // path the redactor alters carried a secret (a token in a query string),
+    // and one too long to keep whole cannot be compared, so either marks the
+    // trace non-replayable rather than storing it bent.
     const startPath = this.anchorPath(conclusion.startPath);
     const endPath = this.anchorPath(conclusion.endPath);
     return {
@@ -122,21 +129,16 @@ export class TraceRecorder {
         name: conclusion.executor.name,
         ...(conclusion.executor.version === undefined ? {} : { version: conclusion.executor.version }),
       },
-      recordedFor: {
-        // Harness identity rather than screen content, so the redactor here is
-        // belt and braces: a title that happened to carry a registered secret
-        // is masked like any other recorded string, and provenance is not
-        // replay input, so masking it poisons nothing.
-        testId: bound(this.redact(conclusion.recordedFor.testId), MAX_TRACE_DESCRIPTOR_CHARS),
-        targetId: bound(this.redact(conclusion.recordedFor.targetId), MAX_TRACE_DESCRIPTOR_CHARS),
-        instructionDigest: conclusion.recordedFor.instructionDigest,
-      },
+      recordedFor: recordedProvenance(conclusion.recordedFor, this.redact),
       summary: summary.trim() === '' ? 'step passed' : summary,
       ...(startPath === undefined ? {} : { startPath }),
       ...(endPath === undefined ? {} : { endPath }),
       ...(conclusion.endAnchors === undefined || conclusion.endAnchors.length === 0
         ? {}
         : { endAnchors: conclusion.endAnchors }),
+      ...(conclusion.goneAnchors === undefined || conclusion.goneAnchors.length === 0
+        ? {}
+        : { goneAnchors: conclusion.goneAnchors }),
       ...(conclusion.endWaitMs === undefined
         ? {}
         : { endWaitMs: Math.min(MAX_TRACE_END_WAIT_MS, Math.max(0, Math.round(conclusion.endWaitMs))) }),
@@ -145,10 +147,7 @@ export class TraceRecorder {
   }
 
   private anchorPath(value: string | undefined): string | undefined {
-    if (value === undefined || value === '') return undefined;
-    const redacted = this.redact(value);
-    if (redacted !== value) this.truncated = true;
-    return bound(redacted, MAX_TRACE_DESCRIPTOR_CHARS);
+    return value === undefined || value === '' ? undefined : this.verbatim(value);
   }
 
   /**
@@ -159,12 +158,14 @@ export class TraceRecorder {
    * kept whole.
    */
   private toRecorded(action: RecordableAction, { target, summary, destination }: DescribedAction): RecordedAction {
-    // A targeted commit whose node yields no durable descriptor cannot be
-    // re-found; the trace stays honest by poisoning instead of guessing.
+    // A targeted commit whose node yields no descriptor a replay could
+    // re-find it by (none at all, or an unnamed twin with no named row to
+    // tell it apart) cannot replay; the trace stays honest by poisoning
+    // instead of guessing.
     const require = (descriptor: TraceTargetDescriptor | undefined): TraceTargetDescriptor => {
-      if (descriptor !== undefined) return descriptor;
+      if (descriptor !== undefined && isRelocatableDescriptor(descriptor)) return descriptor;
       this.truncated = true;
-      return { role: 'unknown' };
+      return descriptor ?? { role: 'unknown' };
     };
     const requireTarget = (): TraceTargetDescriptor => require(target);
     if (isNodeAction(action)) return { name: action.name, summary, target: requireTarget() };
@@ -285,4 +286,23 @@ function sameTarget(a: TraceTargetDescriptor | undefined, b: TraceTargetDescript
     a.position?.index === b.position?.index &&
     a.position?.of === b.position?.of
   );
+}
+
+/**
+ * Provenance as an entry stores it. Harness identity rather than screen
+ * content, so the redactor here is belt and braces: a title or agent name
+ * that happened to carry a registered secret is masked like any other
+ * recorded string, and provenance is not replay input, so masking it poisons
+ * nothing. A step compares its own provenance in this form to the entries
+ * the store holds.
+ */
+export function recordedProvenance(provenance: TraceProvenance, redact: (text: string) => string): TraceProvenance {
+  return {
+    testId: bound(redact(provenance.testId), MAX_TRACE_DESCRIPTOR_CHARS),
+    targetId: bound(redact(provenance.targetId), MAX_TRACE_DESCRIPTOR_CHARS),
+    instructionDigest: provenance.instructionDigest,
+    ...(provenance.paramsDigest === undefined ? {} : { paramsDigest: provenance.paramsDigest }),
+    ...(provenance.callIndex === undefined ? {} : { callIndex: provenance.callIndex }),
+    ...(provenance.agent === undefined ? {} : { agent: bound(redact(provenance.agent), MAX_TRACE_DESCRIPTOR_CHARS) }),
+  };
 }

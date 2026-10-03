@@ -55,8 +55,11 @@ with a memory-only key, and deleted at cleanup.
 
 ## Navigation and origins
 
-A test or the agent may open any http(s) URL; `file:`, `data:`, and
-`javascript:` are denied. There is no origin allowlist, on navigation or on
+On the web a test or the agent may open any http(s) URL, and `about:blank`;
+every other scheme (`file:`, `data:`, `javascript:`, `view-source:`, `blob:`)
+is denied. A device link may use an app's custom scheme, so
+`device.openLink` refuses a list instead: `file:`, `data:`, `javascript:`,
+`view-source:`, `blob:`, and `filesystem:`. There is no origin allowlist, on navigation or on
 secret fills. A click, a redirect, or a popup reaches another origin just as
 a typed URL would, so a gate on typed navigation guarded nothing; and a
 secret is only ever typed into a field the test itself handed to the step, a

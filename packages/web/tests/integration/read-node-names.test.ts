@@ -1,10 +1,12 @@
 /** The real reader names unlabeled text controls by placeholder, controls by their descendants, and reports a cut walk. */
 
-import { chromium, type Browser, type ElementHandle, type Page } from 'playwright';
+import { chromium, type Browser, type ElementHandle, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SemanticNode } from 'e2e/engine';
 import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from '../../src/closed-shadow.ts';
 import { captureDocument } from '../../src/observation.ts';
+import { readSemanticsFunction } from '../../src/in-page/read-semantics.ts';
+import { SECURE_FIELD_SELECTOR } from '../../src/read-node.ts';
 
 let browser: Browser;
 let page: Page;
@@ -182,6 +184,80 @@ describe('names from content and precedence', () => {
       expect(byTestId.get(testId), testId).toMatchObject({ role, name });
       expect(await locatedTestId(role, name), name).toBe(testId);
     }
+  });
+
+  it('reads an embedded control by its value, as the role selector does', async () => {
+    await page.setContent(`
+      <button data-testid="textbox">Flash the screen <input value="3"> times</button>
+      <button data-testid="search">Find <input type="search" value="q"> now</button>
+      <button data-testid="textarea">Note <textarea>hi</textarea> end</button>
+      <button data-testid="aria-label-ignored">Name <input aria-label="ignored" value="v"> end</button>
+      <button data-testid="select">Pick <select><option>A</option><option selected>B</option></select> now</button>
+      <div role="button" data-testid="no-selection">Choose <select><option>A</option><option>B</option></select> now</div>
+      <div role="button" data-testid="multiple">Pick <select multiple><option selected>A</option><option selected>B</option></select> now</div>
+      <div role="button" data-testid="aria-listbox">Pick <div role="listbox"><div role="option" aria-selected="true">X</div><div role="option">Y</div></div> now</div>
+      <div role="button" data-testid="datalist">Find <input list="choices" value="dv"><datalist id="choices"><option>o</option></datalist> now</div>
+      <button data-testid="range">Vol <input type="range" min="0" max="10" value="4"> end</button>
+      <button data-testid="valuetext">Bass <input type="range" aria-valuetext="four" min="0" max="10" value="4"> end</button>
+      <div role="button" data-testid="no-value-attribute">Volume <input type="range" min="0" max="10"> end</div>
+      <div role="button" data-testid="spinbutton">Count <input type="number" value="7"> end</div>
+      <div role="button" data-testid="progress">Load <progress value="30" max="100"></progress> end</div>
+      <div role="button" data-testid="checkbox">Agree <input type="checkbox"> end</div>
+      <div role="button" data-testid="hidden-control">Gain <input value="zz" style="display:none"> end</div>
+      <div role="button" data-testid="aria-hidden-control">Level <input value="zz" aria-hidden="true"> end</div>
+      <span id="count">Count <input value="2"> rows</span><button aria-labelledby="count" data-testid="referenced">z</button>
+      <label for="qty">Qty <input value="5"> items</label><input id="qty" data-testid="label-for">
+      <label>Inside <input value="9" data-testid="own-label"></label>
+    `);
+    const { tree } = await capture();
+    const byTestId = new Map(flatten(tree).map((node) => [node.testId, node]));
+    const cases: readonly [testId: string, role: 'button' | 'textbox', name: string][] = [
+      ['textbox', 'button', 'Flash the screen 3 times'],
+      ['search', 'button', 'Find q now'],
+      ['textarea', 'button', 'Note hi end'],
+      // An embedded control's value comes before its aria-label.
+      ['aria-label-ignored', 'button', 'Name v end'],
+      ['select', 'button', 'Pick B now'],
+      ['no-selection', 'button', 'Choose A now'],
+      ['multiple', 'button', 'Pick A B now'],
+      ['aria-listbox', 'button', 'Pick X now'],
+      ['datalist', 'button', 'Find dv now'],
+      ['range', 'button', 'Vol 4 end'],
+      ['valuetext', 'button', 'Bass four end'],
+      ['no-value-attribute', 'button', 'Volume end'],
+      ['spinbutton', 'button', 'Count 7 end'],
+      ['progress', 'button', 'Load 30 end'],
+      ['checkbox', 'button', 'Agree end'],
+      ['hidden-control', 'button', 'Gain end'],
+      ['aria-hidden-control', 'button', 'Level end'],
+      ['referenced', 'button', 'Count 2 rows'],
+      ['label-for', 'textbox', 'Qty 5 items'],
+      // A control inside its own label is the name's subject, never part of it.
+      ['own-label', 'textbox', 'Inside'],
+    ];
+    for (const [testId, role, name] of cases) {
+      expect(byTestId.get(testId), testId).toMatchObject({ role, name });
+      expect(await locatedTestId(role, name), name).toBe(testId);
+    }
+  });
+
+  it('keeps an embedded control\'s value out of label text and a secure field\'s value out of every name', async () => {
+    await page.setContent(`
+      <label for="qty">Qty <input value="5"> items</label><input id="qty" data-testid="label-for">
+      <button data-testid="secure">Unlock <input type="password" value="hunter2"> now</button>
+      <label for="pin">PIN <input type="password" value="hunter2"> field</label><input id="pin" data-testid="secure-label">
+    `);
+    const options = { testIdAttribute: 'data-testid', secureFieldSelector: SECURE_FIELD_SELECTOR, mode: { kind: 'node' as const } };
+    const reads = await Promise.all(
+      (await page.locator('[data-testid]').all()).map((locator) => locator.evaluate(readSemanticsFunction<typeof options.mode>, options)),
+    );
+    const byTestId = new Map(reads.map((raw) => [raw.testId, raw] as const));
+    // Label text is what Playwright's getByLabel matches, which reads no control value.
+    expect(byTestId.get('label-for')?.labels).toEqual(['Qty items']);
+    expect(await page.getByLabel('Qty items', { exact: true }).getAttribute('data-testid')).toBe('label-for');
+    expect(byTestId.get('secure')?.name).toBe('Unlock now');
+    expect(byTestId.get('secure-label')?.name).toBe('PIN field');
+    expect(JSON.stringify(reads)).not.toContain('hunter2');
   });
 
   it('reads aria-labelledby before aria-label, and either before a label element', async () => {

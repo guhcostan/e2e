@@ -95,6 +95,50 @@ describe('resolveNavigationUrl', () => {
     expect(() => resolveNavigationUrl('data:text/html,x', base)).toThrow(/scheme/);
     expect(() => resolveNavigationUrl('javascript:alert(1)', base)).toThrow(/scheme/);
   });
+
+  it.each([
+    ['view-source:file:///etc/passwd', 'view-source:'],
+    ['view-source:http://localhost:3000/', 'view-source:'],
+    ['VIEW-SOURCE:file:///etc/passwd', 'view-source:'],
+    ['  view-source:file:///etc/passwd', 'view-source:'],
+    ['\tview-source:file:///etc/passwd\n', 'view-source:'],
+    ['view-\tsource:file:///etc/passwd', 'view-source:'],
+    ['FiLe:///etc/passwd', 'file:'],
+    [' file:///etc/passwd', 'file:'],
+    ['blob:http://localhost:3000/0b7c4c1e', 'blob:'],
+    ['filesystem:http://localhost:3000/temporary/x', 'filesystem:'],
+    ['chrome://version', 'chrome:'],
+    ['chrome-extension://abcdefghijklmnop/page.html', 'chrome-extension:'],
+    ['devtools://devtools/bundled/inspector.html', 'devtools:'],
+    ['about:blank#x', 'about:'],
+    ['about:blank?x', 'about:'],
+    ['about:srcdoc', 'about:'],
+    ['about:version', 'about:'],
+    ['ftp://example.test/x', 'ftp:'],
+    ['ws://localhost:3000/socket', 'ws:'],
+    ['myapp://orders/42', 'myapp:'],
+  ])('denies %j: only http(s) is navigable', (input, scheme) => {
+    expect(() => resolveNavigationUrl(input, base)).toThrowError(
+      expect.objectContaining({ code: 'POLICY_DENIED', message: `forbidden URL scheme: ${scheme}` }),
+    );
+    expect(() => resolveNavigationUrl(input, undefined)).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }));
+  });
+
+  it('reads a percent-encoded scheme as a path, not a scheme', () => {
+    expect(resolveNavigationUrl('view-source%3Afile:///etc/passwd', base).url).toBe('http://localhost:3000/app/view-source%3Afile:///etc/passwd');
+    expect(resolveNavigationUrl('%66ile:///etc/passwd', base).url).toBe('http://localhost:3000/app/%66ile:///etc/passwd');
+  });
+
+  it('admits exactly about:blank, which loads nothing', () => {
+    expect(resolveNavigationUrl('about:blank', base).url).toBe('about:blank');
+    expect(resolveNavigationUrl(' ABOUT:blank ', undefined).url).toBe('about:blank');
+  });
+
+  it('admits http(s) in any case and with surrounding whitespace', () => {
+    expect(resolveNavigationUrl('HTTPS://Other.test/x', base).url).toBe('https://other.test/x');
+    expect(resolveNavigationUrl('  http://localhost:3000/a ', base).url).toBe('http://localhost:3000/a');
+    expect(resolveNavigationUrl('//other.test/x', base).url).toBe('http://other.test/x');
+  });
 });
 
 describe('siteOf and sameSite', () => {

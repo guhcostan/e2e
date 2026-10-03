@@ -2,6 +2,8 @@ import { describe, expect as vexpect, it } from 'vitest';
 import { z } from 'zod';
 import { currentAttempt, publishAttempt } from '../../src/expect/attempt.ts';
 import { expect as e2eExpect } from '../../src/expect/index.ts';
+import { currentPollScope, pollLineage, PollScope, runInPollScope } from '../../src/expect/poll-scope.ts';
+import { isAbandonedRejection } from '../../src/internal/abandoned.ts';
 import { SoftFailures } from '../../src/expect/soft.ts';
 import { ConfigurationError, TestError } from '../../src/internal/errors.ts';
 import { Deadline } from '../../src/internal/time.ts';
@@ -303,6 +305,126 @@ describe('expect.poll', () => {
       next.end();
       vexpect(currentAttempt()).toBeUndefined();
     });
+  });
+});
+
+describe('expect.poll in a poll scope', () => {
+  /** A read that counts its calls and never passes `toBe('done')`. */
+  function counting(): { read: () => string; reads: () => number } {
+    let reads = 0;
+    return {
+      read: () => {
+        reads += 1;
+        return 'running';
+      },
+      reads: () => reads,
+    };
+  }
+
+  async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+  }
+
+  it('fails the phase that returned before its poll finished, at the line of the call, and cancels it', async () => {
+    const scope = new PollScope('the test body');
+    const status = counting();
+    const poll = runInPollScope(scope, () => e2eExpect.poll(status.read, { timeout: 5000, interval: 5 }).toBe('done'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const error = scope.close();
+    vexpect(error).toBeInstanceOf(TestError);
+    vexpect(error?.code).toBe('STEP_NOT_AWAITED');
+    vexpect(error?.message).toBe(
+      'the test body returned before expect.poll(...).toBe(...) finished; put `await` in front of every expect.poll call',
+    );
+    vexpect(error?.stack).toContain('expect-poll.test.ts');
+    const rejection = await rejectionOf(poll);
+    vexpect(rejection).toMatchObject({ code: 'CANCELLED' });
+    vexpect(isAbandonedRejection(rejection)).toBe(true);
+    const readsAtClose = status.reads();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    vexpect(status.reads()).toBe(readsAtClose);
+  });
+
+  it('names one poll and counts the rest, negation included', async () => {
+    const scope = new PollScope('the afterEach hook');
+    const polls = runInPollScope(scope, () => [
+      e2eExpect.poll(() => 1, { timeout: 5000 }).not.toBe(1),
+      e2eExpect.poll(() => 1, { timeout: 5000 }).toBe(2),
+    ]);
+    const error = scope.close();
+    vexpect(error?.message).toMatch(/^the afterEach hook returned before expect\.poll\(\.\.\.\)\.not\.toBe\(\.\.\.\) and 1 more finished/);
+    vexpect(scope.close()).toBeUndefined();
+    await Promise.allSettled(polls);
+  });
+
+  it('a poll that would have passed still fails its phase when not awaited', async () => {
+    const scope = new PollScope('the test body');
+    const poll = runInPollScope(scope, () => e2eExpect.poll(settling('running', 'done', 3).read, { interval: 20 }).toBe('done'));
+    vexpect(scope.close()?.code).toBe('STEP_NOT_AWAITED');
+    await vexpect(poll).rejects.toMatchObject({ code: 'CANCELLED' });
+  });
+
+  it('closes quietly when every poll was awaited, whatever its outcome', async () => {
+    const scope = new PollScope('the test body');
+    await runInPollScope(scope, async () => {
+      await e2eExpect.poll(settling('running', 'done', 1).read, { interval: 5 }).toBe('done');
+      await failsWith(() => e2eExpect.poll(() => 'running', { timeout: 30, interval: 5 }).toBe('done'), /timed out after 30 ms/);
+    });
+    vexpect(scope.close()).toBeUndefined();
+  });
+
+  it('a poll belongs to the phase that started it, not to the phase running when it is called', async () => {
+    const timedOut = new PollScope('the test body');
+    const status = counting();
+    let resume!: () => void;
+    const leftover = runInPollScope(timedOut, async () => {
+      await new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      return e2eExpect.poll(status.read, { timeout: 5000 }).toBe('done');
+    });
+    timedOut.close();
+    const next = new PollScope('the test body');
+    await runInPollScope(next, async () => {
+      resume();
+      const rejection = await rejectionOf(leftover);
+      vexpect(rejection).toMatchObject({ code: 'CANCELLED' });
+      vexpect(isAbandonedRejection(rejection)).toBe(true);
+    });
+    vexpect(status.reads()).toBe(0);
+    vexpect(next.close()).toBeUndefined();
+  });
+
+  it('hands a lineage over to the scope current when it is handed over', async () => {
+    const body = new PollScope('the test body');
+    const lineage = runInPollScope(body, () => pollLineage());
+    vexpect(lineage.run(() => currentPollScope())).toBe(body);
+    body.close();
+    const teardown = new PollScope('the fixture "workspace" teardown');
+    runInPollScope(teardown, () => lineage.handOver());
+    const poll = lineage.run(() => e2eExpect.poll(() => 'running', { timeout: 5000 }).toBe('done'));
+    vexpect(teardown.close()?.message).toMatch(/^the fixture "workspace" teardown returned before/);
+    await rejectionOf(poll);
+  });
+
+  it('marks the rejection of a promise derived from an abandoned poll', async () => {
+    const scope = new PollScope('the test body');
+    const derived = runInPollScope(scope, () =>
+      e2eExpect.poll(() => 'running', { timeout: 5000 }).toBe('done').then(() => 'never'),
+    );
+    scope.close();
+    vexpect(isAbandonedRejection(await rejectionOf(derived))).toBe(true);
+  });
+
+  it('stays out of the way of a poll outside any scope', async () => {
+    vexpect(currentPollScope()).toBeUndefined();
+    const poll = e2eExpect.poll(settling('running', 'done', 2).read, { interval: 5 }).toBe('done');
+    const scope = new PollScope('the test body');
+    vexpect(scope.close()).toBeUndefined();
+    await poll;
   });
 });
 

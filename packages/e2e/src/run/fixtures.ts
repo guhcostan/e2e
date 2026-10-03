@@ -445,7 +445,9 @@ function createApp(environment: AttemptEnvironment, engine: LocatorEngine, expos
    * `app.open()` on a target with no URL and no `navigate`, a device: it
    * launches the pinned app fresh, the way Maestro's `launchApp` does, and is
    * what a test calls before it looks at the screen. A path has nowhere to
-   * go there; a link goes through `device.openLink`.
+   * go there; a link goes through `device.openLink`. An engine without a
+   * relaunch hook is refused here; one with a hook reports its own reason it
+   * cannot launch, such as a build not installed yet.
    */
   const launchPinnedApp = (openPath: string | undefined): Promise<void> =>
     steps.run('app', 'app.open', '', async () => {
@@ -455,15 +457,13 @@ function createApp(environment: AttemptEnvironment, engine: LocatorEngine, expos
           `app.open("${openPath}") needs an app URL and target "${target.name}" has none: on a device app.open() launches the pinned app, and a link goes through device.openLink`,
         );
       }
-      try {
-        await engine.session.app.restart(engine.operation(config.timeout));
-      } catch (cause) {
-        if ((cause as { code?: unknown }).code !== 'UNSUPPORTED_CAPABILITY') throw cause;
+      if (target.engine?.session?.restart === undefined) {
         throw new ConfigurationError(
           'UNSUPPORTED_CAPABILITY',
-          `app.open() has no app to launch on target "${target.name}": pin one with the target's app.bundleId or app.appPath, or bring one up with device.openApp`,
+          `app.open() has nothing to open on target "${target.name}": it has no app URL, and engine ${target.engine?.name ?? 'none'} does not relaunch a pinned app`,
         );
       }
+      await engine.session.app.restart(engine.operation(config.timeout));
     });
 
   return {

@@ -1,9 +1,15 @@
-/** The real reader takes a native control's checked and selected state from the control, and aria-* only where there is none. */
+/**
+ * The real reader takes a native control's checked and selected state from
+ * the control, and aria-* only where there is none, and reads a checkbox's or
+ * radio's value apart from its checked state.
+ */
 
-import { chromium, type Browser, type ElementHandle, type Page } from 'playwright';
+import { chromium, type Browser, type ElementHandle, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SemanticNode } from 'e2e/engine';
 import { captureDocument } from '../../src/observation.ts';
+import { readSemanticsFunction } from '../../src/in-page/read-semantics.ts';
+import { SECURE_FIELD_SELECTOR } from '../../src/read-node.ts';
 
 let browser: Browser;
 let page: Page;
@@ -74,5 +80,29 @@ describe('checked and selected', () => {
     for (const testId of ['stale-off', 'stale-on', 'radio-stale-off', 'radio-stale-on', 'plain-on', 'plain-off', 'aria-on', 'aria-off']) {
       expect(await page.getByTestId(testId).isChecked(), testId).toBe(checked(testId));
     }
+  });
+});
+
+describe('a checkable control\'s value', () => {
+  it('reads the value attribute, `on` by default, whatever the checked state, as Playwright\'s inputValue does', async () => {
+    await page.setContent(`
+      <input type="checkbox" data-testid="default-on" checked aria-label="Default on">
+      <input type="checkbox" data-testid="default-off" aria-label="Default off">
+      <input type="checkbox" data-testid="custom" value="yes" aria-label="Custom">
+      <input type="radio" name="plan" data-testid="radio" value="monthly" aria-label="Monthly">
+      <input type="radio" name="plan" data-testid="radio-default" aria-label="Default radio">
+    `);
+    const testIds = ['default-on', 'default-off', 'custom', 'radio', 'radio-default'];
+    const options = { testIdAttribute: 'data-testid', secureFieldSelector: SECURE_FIELD_SELECTOR, mode: { kind: 'node' as const } };
+    const values = await Promise.all(
+      testIds.map(async (id) => (await page.getByTestId(id).evaluate(readSemanticsFunction<typeof options.mode>, options)).value),
+    );
+    expect(values).toEqual(['on', 'on', 'yes', 'monthly', 'on']);
+    for (const [index, testId] of testIds.entries()) {
+      expect(await page.getByTestId(testId).inputValue(), testId).toBe(values[index]);
+    }
+    // The tree drops the token, as it drops an option's value; the checked state says what matters.
+    const nodes = await captureByTestId();
+    expect(testIds.map((testId) => nodes.get(testId)?.value)).toEqual([undefined, undefined, undefined, undefined, undefined]);
   });
 });

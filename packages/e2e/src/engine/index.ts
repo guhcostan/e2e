@@ -203,8 +203,8 @@ export interface EngineFixtureContext {
     /**
      * Resolves a navigation target against the base URL. Throws
      * `APP_URL_REQUIRED` when the target declares no URL and `POLICY_DENIED`
-     * for a `file:`, `data:`, or `javascript:` scheme, so a fixture never
-     * re-implements the rule the harness owns.
+     * for any scheme but `http:` and `https:` (`about:blank` aside), so a
+     * fixture never re-implements the rule the harness owns.
      */
     resolveUrl(url: string): string;
   };

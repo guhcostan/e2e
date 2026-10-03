@@ -637,13 +637,24 @@ describe('app steering hooks', () => {
     expect(calls).toEqual([]);
   });
 
-  it('app.open() on a device without a pinned app is UNSUPPORTED_CAPABILITY and names the app keys', async () => {
+  it('app.open() on an engine with no relaunch hook is UNSUPPORTED_CAPABILITY and says why', async () => {
     const { engine } = device(false);
     const { fixtures } = runtime(engine);
     await expect(fixtures.app.open()).rejects.toMatchObject({
       code: 'UNSUPPORTED_CAPABILITY',
-      message: expect.stringContaining('appPath'),
+      message: expect.stringContaining('does not relaunch a pinned app'),
     });
+  });
+
+  it("app.open() keeps the engine's own reason it cannot launch", async () => {
+    const reason = 'launching the app needs the build installed first with device.installApp()';
+    const engine = defineEngine({
+      name: 'fake', version: '1', spiVersion: 1,
+      observe: async () => snapshot([]),
+      session: { restart: async () => { throw new EngineError('UNSUPPORTED_CAPABILITY', reason, { retryable: false }); } },
+    });
+    const { fixtures } = runtime(engine);
+    await expect(fixtures.app.open()).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY', message: reason });
   });
 });
 

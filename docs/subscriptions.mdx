@@ -1,6 +1,6 @@
 ---
 title: Subscriptions
-description: Use your ChatGPT, GitHub Copilot, or SuperGrok subscription for agent steps.
+description: Use your ChatGPT, GitHub Copilot, OpenCode Console, or SuperGrok subscription for agent steps.
 ---
 
 Use an existing subscription without a separate API key. Choose your plan
@@ -10,6 +10,7 @@ in `e2e init`, install dependencies, then sign in:
 | --- | --- |
 | ChatGPT Plus or Pro | `npx e2e login openai` |
 | GitHub Copilot | `npx e2e login github-copilot` |
+| OpenCode Console (OpenCode Zen and OpenCode Go) | `npx e2e login opencode-console` |
 | SuperGrok or X Premium+ | `npx e2e login spacexai` |
 
 Follow the terminal prompts, then run `npx e2e run`. Agent calls use your
@@ -52,17 +53,17 @@ const agent = { model: chatgpt('gpt-6-luna') };
   <Tab title="GitHub Copilot">
 <CodeGroup>
 ```bash npm
-npm install -D ai @ai-sdk/openai-compatible
+npm install -D ai @ai-sdk/openai-compatible @ai-sdk/openai
 npx e2e login github-copilot
 ```
 
 ```bash pnpm
-pnpm add -D ai @ai-sdk/openai-compatible
+pnpm add -D ai @ai-sdk/openai-compatible @ai-sdk/openai
 pnpm exec e2e login github-copilot
 ```
 
 ```bash bun
-bun add -d ai @ai-sdk/openai-compatible
+bun add -d ai @ai-sdk/openai-compatible @ai-sdk/openai
 bunx e2e login github-copilot
 ```
 </CodeGroup>
@@ -71,6 +72,33 @@ bunx e2e login github-copilot
 import { copilot } from 'e2e/oauth/copilot';
 
 const agent = { model: copilot('claude-sonnet-5') };
+```
+  </Tab>
+  <Tab title="OpenCode Console">
+<CodeGroup>
+```bash npm
+npm install -D ai @ai-sdk/openai-compatible @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google
+npx e2e login opencode-console
+```
+
+```bash pnpm
+pnpm add -D ai @ai-sdk/openai-compatible @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google
+pnpm exec e2e login opencode-console
+```
+
+```bash bun
+bun add -d ai @ai-sdk/openai-compatible @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google
+bunx e2e login opencode-console
+```
+</CodeGroup>
+
+```ts title="Model setup"
+import { opencodeConsole } from 'e2e/oauth/opencode-console';
+
+// OpenCode Zen, billed to the workspace's credits
+const agent = { model: opencodeConsole('deepseek-v4.1-flash') };
+// OpenCode Go, billed to your Go subscription
+const goAgent = { model: opencodeConsole('go/deepseek-v4.1-flash') };
 ```
   </Tab>
   <Tab title="SuperGrok">
@@ -124,20 +152,49 @@ bunx e2e models openai     # one provider
 ```
 </CodeGroup>
 
-Each line is the id to pass to `chatgpt()`, `copilot()`, or `grok()`, the
-vendor's display name, and what it says about the model: reasoning levels,
-vision, preview, or hidden. ChatGPT lists what the Codex backend serves your
-plan; Copilot lists the chat models of your plan; SuperGrok lists the
-language models the token reaches.
+Each line is the id to pass to `chatgpt()`, `copilot()`, `opencodeConsole()`,
+or `grok()`, the vendor's display name, and what it says about the model:
+reasoning levels, vision, preview, or hidden. ChatGPT lists what the Codex
+backend serves your plan; Copilot lists the chat models of your plan;
+OpenCode Console lists the Zen and Go models your workspace has enabled,
+each tagged with the plan that pays for it, and leaves out custom providers; SuperGrok lists the language models the
+token reaches.
 
 Copilot also lists models that `copilot()` cannot call, and marks them:
 
 - `not enabled`: the model is off for your plan. Turn it on in your Copilot
   settings on GitHub, or ask your organization admin if they manage your
   seat.
-- `no chat completions`: Copilot serves the model only over other APIs,
-  mostly its Responses API. `copilot()` uses chat completions, so pick
-  another model.
+- `no chat or responses`: Copilot serves the model only over APIs `copilot()`
+  does not speak, such as Anthropic's Messages API, so pick another model.
+
+On its first call `copilot()` picks the endpoint from the model's entry in
+this same listing: chat completions for most models, Copilot's Responses API
+for the ones served only there. When the listing cannot be read, that call
+goes over chat completions and the next call reads it again. The Responses
+call runs through `@ai-sdk/openai`, so install it beside
+`@ai-sdk/openai-compatible` to use those models; `e2e init` adds both.
+
+### OpenCode Console
+
+One OpenCode Console sign-in serves both plans billed through it:
+
+- A bare id, such as `deepseek-v4.1-flash`, is an OpenCode Zen model, paid from
+  the workspace's credits.
+- A `go/` id, such as `go/deepseek-v4.1-flash`, is an OpenCode Go model, paid
+  from the Go subscription. Go models are listed only when you hold the
+  workspace's Go subscription.
+
+The list leaves out models your workspace has turned off, and Zen's free
+models, which OpenCode keeps for its own clients.
+
+On its first call `opencodeConsole()` reads the workspace config to pick the
+model's API: chat completions, OpenAI Responses (`@ai-sdk/openai`), Anthropic
+Messages (`@ai-sdk/anthropic`), or Google (`@ai-sdk/google`). Install those
+beside `@ai-sdk/openai-compatible`; `e2e init` adds all four. Set
+`providerOptions` under the key of that API: `opencode` for chat completions
+models, on Zen and Go alike, and `openai`, `anthropic`, or `google` for the
+others.
 
 ## Sign-in help
 
@@ -146,6 +203,9 @@ Copilot also lists models that `copilot()` cannot call, and marks them:
 - Copilot reuses your GitHub CLI login. If you do not use `gh`, pass
   `--client-id` for your own GitHub OAuth app with device flow enabled.
   Use `--enterprise-url` for GitHub Enterprise.
+- OpenCode Console prints a device code and opens the page where you approve
+  it and pick the workspace; the page shows e2e as an unknown client. To
+  switch workspaces, run `npx e2e logout opencode-console` and sign in again.
 - SuperGrok prints a device code and the URL where you enter it.
 
 Run `npx e2e login` to choose a provider and see which accounts are signed
@@ -164,3 +224,22 @@ instead of the local file, but refreshed tokens are not saved back to that
 variable. A value containing a rotating refresh token cannot be reused
 indefinitely. See [CLI reference](/reference/cli#e2e-login) for all sign-in
 options.
+
+For OpenCode Console in CI, create a service account API key in the Console
+(Service Accounts, then API Keys) and set it as `OPENCODE_API_KEY`;
+`opencodeConsole()` uses it instead of the stored login. `e2e models` still
+reads the stored login.
+
+<CodeGroup>
+```bash npm
+OPENCODE_API_KEY=oc_sk_... npx e2e run
+```
+
+```bash pnpm
+OPENCODE_API_KEY=oc_sk_... pnpm exec e2e run
+```
+
+```bash bun
+OPENCODE_API_KEY=oc_sk_... bunx e2e run
+```
+</CodeGroup>

@@ -566,6 +566,17 @@ daemon (`npx agent-device daemon stop`) and reboot the simulator
 
 Do what it says.
 
+**`device.installApp()` on Android reports no bundle id or package.** The
+build installed, but agent-device could not say which package it is, so
+`app.open()` would have nothing to launch. agent-device 0.21.18 cannot parse
+the manifest of an APK built with aapt2 (every current Android build), so it
+falls back to the Android SDK's `aapt`, which it looks for under
+`ANDROID_SDK_ROOT`, `ANDROID_HOME`, or `~/Android/Sdk`, not the macOS default
+`~/Library/Android/sdk`. Without `aapt` it names only a package the install
+added, and a build already on the emulator adds none. Set the target's
+`app.bundleId`, or export `ANDROID_HOME` and stop the agent-device daemon
+(`daemon stop` below) so the next run starts it with the variable.
+
 **A timeout on the device.** A simulator boot, runner connection, or app
 launch that times out on the device is `ENGINE_FAILURE` with agent-device's
 message and hint, never one of e2e's own timeout codes (`LAUNCH_TIMEOUT`,
@@ -595,7 +606,7 @@ xcrun simctl shutdown <udid> && xcrun simctl boot <udid>
   <Card title="Mobile engine reference" icon="mobile-screen" href="/reference/mobile">
     Every option, the `device` fixture, and the tool pack.
   </Card>
-  <Card title="Writing tests" icon="pen-to-square" href="/writing-tests">
-    Goals, checks, and the deterministic APIs, on any platform.
+  <Card title="Locators" icon="crosshairs" href="/locators">
+    Exact taps, swipes, and checks with `screen` and `expect`, on any platform.
   </Card>
 </CardGroup>

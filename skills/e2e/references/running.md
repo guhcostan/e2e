@@ -11,7 +11,7 @@ npx e2e guide [topic]              # print this skill; topics: setup, writing-te
                                    # running, explore, debugging, mcp, bug-bash
 npx e2e cache ls|clear|stats       # inspect or empty the replay cache
 npx e2e login|logout|models [provider]  # e2e/oauth subscription logins: openai,
-                                   # github-copilot, spacexai
+                                   # github-copilot, opencode-console, spacexai
 npx e2e mcp [--target <name>]      # MCP server for a coding agent (topic mcp)
 npx e2e feedback -m <text> [opts]  # report a problem with e2e itself
 npx e2e telemetry [disable|enable] # anonymous usage telemetry: status or switch
@@ -27,7 +27,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status or switch
 | `--tag <tags>` | Any of the tags, comma-separated or repeated; all of them with `--tag-mode all`. An empty `--target`, `--tag`, or `--agent` value is a usage error, exit 2. |
 | `--exclude-tag <tags>` | Drop tests carrying any of these tags, however selected. |
 | `--grep <pattern>`, `--grep-invert <pattern>` | Keep, or drop, tests whose title (describe titles and test title joined by spaces, `checkout pays`; not file or tags) matches a regular expression. Bare pattern or `'/pattern/i'`; repeat for alternatives. |
-| `--last-failed` | The tests the previous run (`<output>/report.json`) did not pass, plus every test in a failed `beforeAll` or `afterAll` scope. No report is `NO_LAST_RUN`, exit 2. |
+| `--last-failed` | The tests the previous run (`<output>/report.json`) did not pass or never ran (`--max-failures` included), plus every test in a failed `beforeAll` or `afterAll` scope. A test another filter leaves out stays owed (`run.carried` in the report) until a rerun runs it. No report is `NO_LAST_RUN`, exit 2. |
 | `--shard <index/total>` | One contiguous slice of the selected tests (`--shard 2/3`), cut after every other filter; serial groups stay whole, each shard brings its own setup tests. |
 | `--headed` | Visible browser or simulator when the engine supports it. |
 | `--agent <names>` | Run unpinned tests as these `agents.<name>` entries (default `agents.default`), comma-separated or repeated; several names run each such test once per agent. |
@@ -87,7 +87,8 @@ its own tools.
 `summary.md`, `failures/`, `ai-trace.json`, `sessions/`, and `artifacts/`
 (screenshots, Playwright traces, videos, `--debug` transcripts, downloads).
 `artifacts/` is cleared once a run's tests start; a run stopping before
-leaves the last run's files. The report records every artifact path, a
+leaves the last run's files, and a `--last-failed` rerun keeps the files
+the report it reruns names and writes its own under `artifacts/rerun-<n>/`. The report records every artifact path, a
 hosted service's video by URL.
 
 - `list` (default): setup steps, one line per file and target, a `Failed
@@ -102,11 +103,14 @@ hosted service's video by URL.
   and `run.results[]`, one per test and target: `titlePath`, `file`,
   `source`, `tags` (`[]` when none), `agent`, `repeat` (0 unless
   `--repeat-each`), `selected`, `status`, `attempts[]` of `steps[]`,
-  `artifacts[]`, `error`.
+  `artifacts[]`, `error`. `run.summary` counts the selected results:
+  `passed`, `failed` (timed out included), `interrupted` (stopped by the
+  run: a signal, `--max-failures`, a run-level error; not a failure), `flaky`, and `skipped` add up
+  to `selected`; `discovered - selected` were left out.
 - `junit`: `junit.xml` for CI summaries; `--reporter list,junit` keeps the
   terminal output.
 - `markdown` (`--reporter list,markdown`): `summary.md` plus one page per
-  failed or flaky test under `failures/`. The summary holds counts and
+  failed or flaky test under `failures/` (an interrupted test gets none). The summary holds counts and
   spend, a block per failed test (error, facts, failing step, whether every
   attempt failed alike, last model turns, screen location and closest
   nodes, the line to look at, evidence paths), the flaky tests folded
@@ -142,8 +146,9 @@ interrupted workers keeps the failures' or the error's code. Exit 2 is
 deterministic, never retry it; only exit 3 is worth a job-level retry.
 
 The first SIGINT or SIGTERM interrupts and writes the report if any test
-had started; the second forces engine teardown; the third kills the app
-process groups and exits 130 at once.
+had started; the second forces engine teardown and still writes the
+report, plus `junit.xml` and `summary.md` when those reporters are on; the
+third kills the app process groups and exits 130 at once.
 
 ## Continuous integration
 
@@ -174,7 +179,7 @@ jobs:
           node-version: 26 # any Node >= 22.12
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: npx playwright install chromium --with-deps
+      - run: pnpm exec e2e-web install chromium --with-deps
       - run: npx e2e run --reporter list,junit
         env:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}

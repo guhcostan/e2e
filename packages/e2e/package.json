@@ -62,6 +62,10 @@
     "./oauth/grok": {
       "types": "./dist/oauth/grok.d.ts",
       "default": "./dist/oauth/grok.js"
+    },
+    "./oauth/opencode-console": {
+      "types": "./dist/oauth/opencode-console.d.ts",
+      "default": "./dist/oauth/opencode-console.js"
     }
   },
   "bin": {
@@ -94,12 +98,20 @@
     "zod": "4.6.1"
   },
   "peerDependencies": {
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/google": "^4.0.0",
     "@ai-sdk/openai": "^4.0.0",
     "@ai-sdk/openai-compatible": "^3.0.0",
     "@ai-sdk/xai": "^5.0.0",
     "ai": "^7.0.0"
   },
   "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
     "@ai-sdk/openai": {
       "optional": true
     },
@@ -114,6 +126,8 @@
     }
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "4.0.58",
+    "@ai-sdk/google": "4.0.77",
     "@ai-sdk/openai": "4.0.71",
     "@ai-sdk/openai-compatible": "3.0.53",
     "@ai-sdk/xai": "5.0.4",
@@ -125,7 +139,6 @@
     "ai": "7.0.107",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "playwright": "1.63.0",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   },

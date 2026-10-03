@@ -83,6 +83,14 @@ const FLOWS: readonly Flow[] = [
       calls <= 1 ? [{ toolName: 'check', input: { target: nodeIdFor(call.prompt, /checkbox "Agree to terms"/), checked: true } }] : undefined,
   },
   {
+    title: 'checks a radio the pick replaces with its summary',
+    instruction: 'pick Express delivery',
+    check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('delivery: Express');`,
+    replays: true,
+    script: (calls, call) =>
+      calls === 0 ? [{ toolName: 'check', input: { target: nodeIdFor(call.prompt, /radio "Express"/), checked: true } }] : undefined,
+  },
+  {
     title: 'uploads a project file',
     instruction: 'attach the fixture file',
     check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('attached: attachment.txt');`,
@@ -281,6 +289,14 @@ describe('agent.act grammar verbs', () => {
     expect(third!.lastToolResult).not.toContain('had no visible effect');
   });
 
+  it('records a check whose radio the pick replaced: the click landed', () => {
+    expect(resultByTitle(outcome, 'checks a radio the pick replaces with its summary').status).toBe('passed');
+    const actions = engineEvents('checks a radio the pick replaces with its summary');
+    expect(actions.map((event) => `${event.name}:${event.status}`)).toEqual(['check:passed']);
+    expect(actions[0]!.detail).toBe('check radio "Express" in "Delivery"');
+    expect(turnsOf('pick Express delivery')[1]!.lastToolResult).toMatch(/changed #\S+ status "Gesture state" text="delivery: Express"/);
+  });
+
   it('uploads a project-relative file, recording the path as given and the policy decision', () => {
     expect(resultByTitle(outcome, 'uploads a project file').status).toBe('passed');
     const step = stepOf('uploads a project file');
@@ -415,10 +431,14 @@ describe('agent.act grammar verbs: record then zero-turn replay', () => {
     }
   });
 
-  it('replays hover, drag, check, upload, scroll into view, and back without a model call', () => {
+  it('replays hover, drag, check, upload, and scroll into view without a model call, and runs a round trip that changed nothing live', () => {
     expect(secondRun.exitCode).toBe(0);
-    expect(secondRunModelCalls).toBe(0);
-    for (const flow of flows) {
+    // A round trip leaves the screen and the route as it found them: nothing a
+    // replay could check, so it is never recorded and the model runs it again.
+    const roundTrip = actStepOf(secondRun, 'opens a page and comes back');
+    expect(roundTrip.cache).toMatchObject({ mode: 'missed', reason: 'no-entry' });
+    expect(secondRunModelCalls).toBe(roundTrip.metrics!.modelCalls);
+    for (const flow of flows.filter((entry) => entry.title !== 'opens a page and comes back')) {
       const step = actStepOf(secondRun, flow.title);
       expect(step.cache, flow.title).toMatchObject({ mode: 'self-finalized' });
       expect(step.metrics!.modelCalls, flow.title).toBe(0);
@@ -426,7 +446,7 @@ describe('agent.act grammar verbs: record then zero-turn replay', () => {
     const engineNames = (title: string) => actStepOf(secondRun, title).events.filter((event) => event.kind === 'engine').map((event) => event.name);
     expect(engineNames('hovers the menu trigger and taps what it reveals')).toEqual(['hover', 'tap']);
     expect(engineNames('drags the card onto the done column')).toEqual(['dragTo']);
-    expect(engineNames('opens a page and comes back')).toEqual(['tap', 'back']);
+    expect(engineNames('checks a radio the pick replaces with its summary')).toEqual(['check']);
     expect(actStepOf(secondRun, 'uploads a project file').events.filter((event) => event.kind === 'policy')).toEqual([
       expect.objectContaining({ name: 'upload.path', decision: 'allowed' }),
     ]);

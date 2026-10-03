@@ -4,7 +4,7 @@
  * are read, and which ones the engine cannot express at all.
  */
 
-import type { Locator as PwLocator, Page } from 'playwright';
+import type { Locator as PwLocator, Page } from 'playwright-core';
 import { describe, expect, it } from 'vitest';
 import type { LocatorExpression, TextPattern } from 'e2e/engine';
 import { applyPostSteps, projectExpression as projectWith, type PostStep } from '../../src/locators.ts';
@@ -114,8 +114,7 @@ describe('projectExpression', () => {
     const projected = projectExpression(page, visibleLabel);
     const visibleLabelChain = [
       expect.stringMatching(/^locator\(e2e-label=/),
-      'filter(visible=true)',
-      'locator(:scope:not([aria-hidden="true"]))',
+      'locator(e2e-shown=)',
     ];
     expect(chainOf(projected.locator)).toEqual(visibleLabelChain);
     expect(projected.visible).toBe(true);
@@ -126,16 +125,15 @@ describe('projectExpression', () => {
       query: { kind: 'displayValue', value: { kind: 'string', value: 'ada', exact: true }, visible: true },
     };
     expect(chainOf(projectExpression(page, visibleValue).locator)).toEqual([
-      'locator(e2e-roots=input, textarea, select)',
-      'filter(visible=true)',
-      'locator(:scope:not([aria-hidden="true"]))',
+      'locator(e2e-roots=input:not([type="checkbox" i]):not([type="radio" i]), textarea, select)',
+      'locator(e2e-shown=)',
     ]);
     const visibleText: LocatorExpression = {
       kind: 'query',
       query: { kind: 'text', value: { kind: 'string', value: 'Save', exact: true }, visible: true },
     };
     expect(chainOf(projectExpression(page, visibleText).locator)).toEqual([
-      ROOTS, 'text(Save,exact)', 'filter(visible=true)', 'locator(:scope:not([aria-hidden="true"]))',
+      ROOTS, 'text(Save,exact)', 'locator(e2e-shown=)',
     ]);
   });
 
@@ -200,7 +198,7 @@ describe('projectExpression', () => {
       source: { kind: 'index', source: shared, index: 'last' },
       index: 'first',
     });
-    expect(chainOf(projected.locator)).toEqual(['locator(e2e-roots=input, textarea, select)']);
+    expect(chainOf(projected.locator)).toEqual(['locator(e2e-roots=input:not([type="checkbox" i]):not([type="radio" i]), textarea, select)']);
     expect(projected.displayValue).toEqual({ kind: 'string', value: 'shared', exact: true });
     expect(projected.steps).toEqual([
       { kind: 'index', index: 'last' },
@@ -215,7 +213,7 @@ describe('projectExpression', () => {
       index: 0,
     });
     expect(chainOf(projected.locator)).toEqual([
-      'locator(e2e-roots=input, textarea, select)',
+      'locator(e2e-roots=input:not([type="checkbox" i]):not([type="radio" i]), textarea, select)',
       `filter(hasText=x,has=${ROOTS}>role(textbox))`,
     ]);
     expect(projected.displayValue).not.toBeNull();
@@ -239,7 +237,7 @@ describe('projectExpression', () => {
       hasText: { kind: 'string', value: 'x', exact: false },
       has: textbox,
     });
-    expect(chainOf(projected.locator)).toEqual(['locator(e2e-roots=input, textarea, select)']);
+    expect(chainOf(projected.locator)).toEqual(['locator(e2e-roots=input:not([type="checkbox" i]):not([type="radio" i]), textarea, select)']);
     expect(projected.steps).toHaveLength(2);
     expect(projected.steps[0]).toEqual({ kind: 'index', index: 'first' });
     const filter = projected.steps[1]!;

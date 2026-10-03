@@ -42,10 +42,11 @@ export function bound(text: string, maxChars: number): string {
 }
 
 /**
- * Cap on recorded end anchors. Anchors are the step's own delta — what
- * appeared on screen between the first observation and the passing one — so
- * a same-screen mutation rarely has more than a handful; a step that changes
- * the whole screen keeps the first few in document order.
+ * Cap on recorded anchors, per side of the delta. Anchors are the step's own
+ * delta, what appeared on screen between the first observation and the
+ * passing one and what vanished, so a same-screen mutation rarely has more
+ * than a handful; a step that changes the whole screen keeps the first few,
+ * announcements first (`cache/anchors.ts`).
  */
 export const MAX_TRACE_ANCHORS = 8;
 /** Longest a replay waits for the recorded end state to return. */
@@ -78,16 +79,25 @@ const SHA256_HEX = /^[a-f0-9]{64}$/u;
 
 /**
  * What a trace was recorded for, in the terms a person uses: the test, the
- * target, and the digest of the instruction. None of it is replay input —
- * every one of these fields is already in the key, so a mismatch is a miss
- * before an entry is ever read — and none of it is trusted as such. It exists
- * so a file named after a digest can say which test it belongs to.
+ * target, the digest of the instruction, and, on entries recorded since they
+ * were added, the rest of what names the step within its test. None of it is
+ * replay input — every one of these fields is already in the key, so a
+ * mismatch is a miss before an entry is ever read — and none of it is trusted
+ * as such. It exists so a file named after a digest can say which step it
+ * belongs to, and so `cache.strict` can tell a step whose key changed under
+ * its recording from a step that was never recorded.
  */
 export interface TraceProvenance {
   readonly testId: string;
   readonly targetId: string;
   /** SHA-256 of the normalized instruction (`cache/identity.ts`). */
   readonly instructionDigest: string;
+  /** SHA-256/JCS of the step's params as the key digests them, a placeholder for each `unique()` value. */
+  readonly paramsDigest?: string;
+  /** Zero-based occurrence of the step among its repeats in the attempt. */
+  readonly callIndex?: number;
+  /** Name of the configured agent the step ran with. */
+  readonly agent?: string;
 }
 
 /**
@@ -123,7 +133,27 @@ export interface TraceTargetDescriptor {
    * twin that appeared or vanished still diverges instead of guessing.
    */
   readonly position?: TracePosition;
+  /**
+   * An anchor's states that were on, sorted; anchors only. A switch turned
+   * on is the same control before and after, so its state is what tells
+   * the step's effect from a tap that did nothing.
+   */
+  readonly states?: readonly TraceAnchorState[];
+  /**
+   * An anchor's current input value, redacted and bounded like its text;
+   * anchors only, and never a secure field's, which is never observed. A
+   * field typed into or an option selected is the same control before and
+   * after, so its value is the step's effect.
+   */
+  readonly value?: string;
 }
+
+/** The node states an anchor records: the ones a step sets on a control it leaves on screen. */
+export const TRACE_ANCHOR_STATES = ['checked', 'expanded', 'pressed', 'selected'] as const;
+
+export type TraceAnchorState = (typeof TRACE_ANCHOR_STATES)[number];
+
+const isTraceAnchorState = oneOf(TRACE_ANCHOR_STATES);
 
 interface ActionBase {
   /** One-line prose summary — the only view a mid-step hand-off notice shows. */
@@ -329,18 +359,23 @@ export type RecordedAction =
 
 export interface ActionTrace {
   readonly actions: readonly RecordedAction[];
-  /** Executor that produced the trace — provenance, never part of the key (OQ10). */
+  /** Executor that produced the trace: provenance, never part of the key, which names the agent instead. */
   readonly executor: { readonly name: string; readonly version?: string };
   /** Which test, target, and instruction recorded it; absent on older entries. */
   readonly recordedFor?: TraceProvenance;
   /** The recorded run's verdict summary. */
   readonly summary: string;
-  /** Location path when the step began; a precondition unless the trace opens with navigate. */
+  /**
+   * Location when the step began, as the cache compares it (`appLocation`):
+   * a path on the app's own origin, else the whole location. A precondition
+   * unless the trace opens with navigate.
+   */
   readonly startPath?: string;
   /**
-   * Location path when the step passed — the trace's deterministic postcondition.
-   * A full replay self-finalizes only while the live pathname still matches;
-   * a recorded flow whose destination changed hands off instead of passing.
+   * Location when the step passed, spelled like `startPath`: the trace's
+   * deterministic postcondition. A full replay self-finalizes only while
+   * the live route still matches; a recorded flow whose destination changed
+   * hands off instead of passing.
    */
   readonly endPath?: string;
   /**
@@ -352,6 +387,14 @@ export interface ActionTrace {
    * instead of passing on mechanics alone.
    */
   readonly endAnchors?: readonly TraceTargetDescriptor[];
+  /**
+   * Descriptors of nodes that were on screen when the step began and were
+   * gone when it passed: a delete, a dismissed dialog, a cleared draft. A
+   * full replay self-finalizes only while every one of them is gone again,
+   * so a removal that did not happen hands off instead of passing with no
+   * anchor to check.
+   */
+  readonly goneAnchors?: readonly TraceTargetDescriptor[];
   /**
    * How long the recorded run took from its first action to its passing
    * verdict, plus a margin. A replay waits up to this long for the anchors to
@@ -419,18 +462,11 @@ function readActionTrace(document: unknown): ActionTrace | undefined {
   const summary = readBoundedText(raw['summary'], MAX_TRACE_SUMMARY_CHARS);
   if (summary === undefined) return undefined;
 
-  const startPath = raw['startPath'];
-  if (startPath !== undefined) {
-    if (typeof startPath !== 'string' || startPath === '' || startPath.length > MAX_TRACE_DESCRIPTOR_CHARS) {
-      return undefined;
-    }
-  }
-  const endPath = raw['endPath'];
-  if (endPath !== undefined) {
-    if (typeof endPath !== 'string' || endPath === '' || endPath.length > MAX_TRACE_DESCRIPTOR_CHARS) {
-      return undefined;
-    }
-  }
+  // A location is a replay precondition, kept whole like a typed value.
+  const startPath = raw['startPath'] === undefined ? undefined : readInputText(raw['startPath']);
+  if (raw['startPath'] !== undefined && startPath === undefined) return undefined;
+  const endPath = raw['endPath'] === undefined ? undefined : readInputText(raw['endPath']);
+  if (raw['endPath'] !== undefined && endPath === undefined) return undefined;
   const truncated = raw['truncated'];
   if (truncated !== undefined && typeof truncated !== 'boolean') return undefined;
 
@@ -441,13 +477,10 @@ function readActionTrace(document: unknown): ActionTrace | undefined {
   ) {
     return undefined;
   }
-  const anchorsRaw = raw['endAnchors'];
-  let endAnchors: TraceTargetDescriptor[] | undefined;
-  if (anchorsRaw !== undefined) {
-    if (!Array.isArray(anchorsRaw) || anchorsRaw.length > MAX_TRACE_ANCHORS) return undefined;
-    endAnchors = each(anchorsRaw, readDescriptor);
-    if (endAnchors === undefined) return undefined;
-  }
+  const endAnchors = readAnchors(raw['endAnchors']);
+  if (endAnchors === undefined) return undefined;
+  const goneAnchors = readAnchors(raw['goneAnchors']);
+  if (goneAnchors === undefined) return undefined;
 
   const actionsRaw = raw['actions'];
   if (!Array.isArray(actionsRaw) || actionsRaw.length === 0 || actionsRaw.length > MAX_TRACE_ACTIONS) {
@@ -466,12 +499,19 @@ function readActionTrace(document: unknown): ActionTrace | undefined {
     summary,
     ...(startPath === undefined ? {} : { startPath }),
     ...(endPath === undefined ? {} : { endPath }),
-    ...(endAnchors === undefined || endAnchors.length === 0 ? {} : { endAnchors }),
+    ...(endAnchors.length === 0 ? {} : { endAnchors }),
+    ...(goneAnchors.length === 0 ? {} : { goneAnchors }),
     ...(endWaitMs === undefined ? {} : { endWaitMs }),
     ...(truncated === undefined ? {} : { truncated }),
   };
 }
 
+/** One side of the recorded delta: absent reads as empty, anything malformed or over the cap as undefined. */
+function readAnchors(document: unknown): TraceTargetDescriptor[] | undefined {
+  if (document === undefined) return [];
+  if (!Array.isArray(document) || document.length > MAX_TRACE_ANCHORS) return undefined;
+  return each(document, readDescriptor);
+}
 
 function readRecordedAction(document: unknown): RecordedAction | undefined {
   if (typeof document !== 'object' || document === null || Array.isArray(document)) {
@@ -646,6 +686,7 @@ export const DESCRIPTOR_FIELDS = [
   'selector',
   'inputPurpose',
   'within',
+  'value',
 ] as const;
 
 /**
@@ -653,7 +694,7 @@ export const DESCRIPTOR_FIELDS = [
  * a test supplied can reappear. `role`, `selector`, and `inputPurpose` are
  * vocabulary, never screen text.
  */
-const DESCRIPTOR_TEXT_FIELDS = ['name', 'text', 'testId', 'placeholder', 'within'] as const;
+const DESCRIPTOR_TEXT_FIELDS = ['name', 'text', 'testId', 'placeholder', 'within', 'value'] as const;
 
 /** A string rewrite; `undefined` means the text cannot be rewritten and the whole trace is unusable. */
 export type TraceTextMap = (text: string) => string | undefined;
@@ -758,6 +799,8 @@ export function mapTraceText(trace: ActionTrace, map: TraceTextMap): ActionTrace
   }
   const endAnchors = trace.endAnchors === undefined ? undefined : mapDescriptors(trace.endAnchors, map);
   if (trace.endAnchors !== undefined && endAnchors === undefined) return undefined;
+  const goneAnchors = trace.goneAnchors === undefined ? undefined : mapDescriptors(trace.goneAnchors, map);
+  if (trace.goneAnchors !== undefined && goneAnchors === undefined) return undefined;
   return {
     ...trace,
     actions,
@@ -765,6 +808,7 @@ export function mapTraceText(trace: ActionTrace, map: TraceTextMap): ActionTrace
     ...(startPath === undefined ? {} : { startPath }),
     ...(endPath === undefined ? {} : { endPath }),
     ...(endAnchors === undefined ? {} : { endAnchors }),
+    ...(goneAnchors === undefined ? {} : { goneAnchors }),
   };
 }
 
@@ -777,7 +821,7 @@ function readDescriptor(document: unknown): TraceTargetDescriptor | undefined {
     return undefined;
   }
   const raw = document as Record<string, unknown>;
-  const descriptor: Record<string, string | TracePosition> = {};
+  const descriptor: Record<string, string | TracePosition | readonly TraceAnchorState[]> = {};
   for (const field of DESCRIPTOR_FIELDS) {
     const value = raw[field];
     if (value === undefined) continue;
@@ -790,7 +834,20 @@ function readDescriptor(document: unknown): TraceTargetDescriptor | undefined {
     if (position === undefined) return undefined;
     descriptor['position'] = position;
   }
+  if (raw['states'] !== undefined) {
+    const states = readStates(raw['states']);
+    if (states === undefined) return undefined;
+    descriptor['states'] = states;
+  }
   return descriptor as TraceTargetDescriptor;
+}
+
+/** Known anchor states, each once, in sorted order, as `anchors.ts` writes them; an empty list is never written. */
+function readStates(document: unknown): readonly TraceAnchorState[] | undefined {
+  if (!Array.isArray(document) || document.length === 0) return undefined;
+  const states = each(document, (state) => (isTraceAnchorState(state) ? state : undefined));
+  if (states === undefined) return undefined;
+  return states.every((state, index) => index === 0 || states[index - 1]! < state) ? states : undefined;
 }
 
 /** A well-formed position: two safe integers with the index inside the count. */
@@ -814,7 +871,22 @@ function readProvenance(document: unknown): TraceProvenance | undefined {
   const instructionDigest = raw['instructionDigest'];
   if (testId === undefined || targetId === undefined) return undefined;
   if (typeof instructionDigest !== 'string' || !SHA256_HEX.test(instructionDigest)) return undefined;
-  return { testId, targetId, instructionDigest };
+  const paramsDigest = raw['paramsDigest'];
+  if (paramsDigest !== undefined && (typeof paramsDigest !== 'string' || !SHA256_HEX.test(paramsDigest))) return undefined;
+  const callIndex = raw['callIndex'];
+  if (callIndex !== undefined && (typeof callIndex !== 'number' || !Number.isSafeInteger(callIndex) || callIndex < 0)) {
+    return undefined;
+  }
+  const agent = raw['agent'] === undefined ? undefined : readBoundedText(raw['agent'], MAX_TRACE_DESCRIPTOR_CHARS);
+  if (raw['agent'] !== undefined && agent === undefined) return undefined;
+  return {
+    testId,
+    targetId,
+    instructionDigest,
+    ...(paramsDigest === undefined ? {} : { paramsDigest }),
+    ...(callIndex === undefined ? {} : { callIndex }),
+    ...(agent === undefined ? {} : { agent }),
+  };
 }
 
 function readBoundedText(value: unknown, maxChars: number): string | undefined {

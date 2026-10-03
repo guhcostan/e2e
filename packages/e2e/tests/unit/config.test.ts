@@ -7,6 +7,7 @@ import { ConfigurationError, defineEngine } from '../../src/engine/index.ts';
 import { secrets } from '../../src/secrets.ts';
 import type { CommandConfig, E2EConfig, Target, TargetApp } from '../../src/types.ts';
 import { snapshot } from '../helpers/snapshot.ts';
+import { invalid } from '../helpers/invalid.ts';
 
 const ROOT = '/tmp/e2e-config-project';
 const BASE_ENV = {} as NodeJS.ProcessEnv;
@@ -51,6 +52,16 @@ describe('CI mode', () => {
 });
 
 describe('resolveConfig', () => {
+  it('validates the opt-in skip failure policy without invalidating recordings', () => {
+    expect(resolve({}).failOnSkippedFailure).toBe(false);
+    expect(resolve({ failOnSkippedFailure: true }).failOnSkippedFailure).toBe(true);
+    expect(resolve({ failOnSkippedFailure: false }).failOnSkippedFailure).toBe(false);
+    expect(resolve({ failOnSkippedFailure: true }).configDigest).toBe(resolve({}).configDigest);
+    for (const value of ['true', 1, null, {}]) {
+      expect(() => resolve(invalid({ failOnSkippedFailure: value }))).toThrow(/failOnSkippedFailure must be a boolean/);
+    }
+  });
+
   it('applies specification defaults', () => {
     const config = resolve({});
     expect(config.timeout).toBe(120_000);
@@ -621,6 +632,63 @@ describe('resolveConfig', () => {
     expect(() =>
       resolve({ credentials: { admin: { username: 'u', password: 'password-1' } }, secrets: { 'admin.password': 'value-1' } }),
     ).toThrow(/secret "admin.password" has the name of credential "admin"'s password handle; rename the secret/);
+  });
+
+  it('refuses two secrets that share an E2E_SECRET_* variable, naming the entries and never a value, whether or not it is set', () => {
+    const values = ['secret-value-a1', 'secret-value-b2', 'secret-value-c3'];
+    const colliding = { 'api-key': values[0]!, api_key: values[1]! };
+    for (const env of [BASE_ENV, { ...BASE_ENV, E2E_SECRET_API_KEY: 'rotated-value-z9' } as NodeJS.ProcessEnv]) {
+      let error: unknown;
+      try {
+        resolve({ secrets: colliding }, env);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({ code: 'INVALID_CONFIG' });
+      const message = (error as Error).message;
+      expect(message).toBe(
+        'secrets "api-key" and "api_key" share the override variable E2E_SECRET_API_KEY, so one value set there would replace all of them; rename all but one',
+      );
+      for (const value of [...values, 'rotated-value-z9']) expect(message).not.toContain(value);
+    }
+    expect(() => resolve({ secrets: { 'api.key': values[0]!, 'API-KEY': values[1]!, apikey: values[2]! } })).toThrow(
+      /^secrets "api\.key" and "API-KEY" share the override variable E2E_SECRET_API_KEY/,
+    );
+    expect(() => resolve({ secrets: { 'a-b': values[0]!, a_b: values[1]!, 'a.b': values[2]! } })).toThrow(
+      /^secrets "a-b", "a_b" and "a\.b" share/,
+    );
+    expect(() => resolve({ secrets: { 'pk-live': () => 'from-provider', pk_live: values[0]! } })).toThrow(/E2E_SECRET_PK_LIVE/);
+  });
+
+  it('refuses two credentials that share E2E_USER_* variables, naming the entries and never a value', () => {
+    const credential = (password: string) => ({ username: 'user@example.test', password });
+    let error: unknown;
+    try {
+      resolve({ credentials: { 'svc-a': credential('password-one-1'), svc_a: credential('password-two-2') } });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({ code: 'INVALID_CONFIG' });
+    const message = (error as Error).message;
+    expect(message).toBe(
+      'credentials "svc-a" and "svc_a" share the override variables E2E_USER_SVC_A_USERNAME and E2E_USER_SVC_A_PASSWORD, so one value set there would replace all of them; rename all but one',
+    );
+    expect(message).not.toMatch(/password-one-1|password-two-2|user@example\.test/);
+  });
+
+  it('keeps E2E_USER_* and E2E_SECRET_* apart and accepts punctuation that maps to a distinct variable', () => {
+    const config = resolve(
+      {
+        credentials: { 'svc-a': { username: 'u', password: 'password-1' }, 'svc-b': { username: 'u', password: 'password-2' } },
+        secrets: { 'svc-a': 'secret-value-1', 'stripe.key': 'secret-value-2', 'stripe-key-2': 'secret-value-3' },
+      },
+      { ...BASE_ENV, E2E_SECRET_STRIPE_KEY: 'rotated-stripe', E2E_USER_SVC_A_PASSWORD: 'rotated-password' } as NodeJS.ProcessEnv,
+    );
+    expect(config.secrets.get('stripe.key')?.value).toBe('rotated-stripe');
+    expect(config.secrets.get('stripe-key-2')?.value).toBe('secret-value-3');
+    expect(config.secrets.get('svc-a')?.value).toBe('secret-value-1');
+    expect(config.allSecrets.get('svc-a.password')?.value).toBe('rotated-password');
+    expect(config.allSecrets.get('svc-b.password')?.value).toBe('password-2');
   });
 
   it('refuses a static secret or password under 6 code points, from config or the environment, naming the minimum', () => {

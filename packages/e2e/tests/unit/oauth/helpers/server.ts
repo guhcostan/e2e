@@ -99,6 +99,8 @@ export function useVendor(afterEach: (fn: () => void) => void) {
   });
   return (vendor: { url: string }, logins: Record<string, OAuthCredentials>): void => {
     vi.stubEnv(CREDENTIALS_ENV, JSON.stringify(logins));
+    // A key in the developer's shell would replace the stored login under test.
+    vi.stubEnv('OPENCODE_API_KEY', '');
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const request = new Request(input, init);
       const url = new URL(request.url);

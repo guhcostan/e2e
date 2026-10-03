@@ -3,6 +3,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 const SIZES = ["Small", "Medium", "Large"] as const;
+const DELIVERIES = ["Standard", "Express"] as const;
 const INITIAL_FILES = ["quarterly-report.pdf", "report.pdf", "notes.txt"];
 const TARGET_FILE = "report.pdf";
 const RENAMED_FILE = "summary.pdf";
@@ -10,6 +11,7 @@ const LONG_PRESS_MS = 500;
 const DETAILS_QUERY = "view=details";
 
 type Size = (typeof SIZES)[number];
+type Delivery = (typeof DELIVERIES)[number];
 type View = "inventory" | "details";
 
 /**
@@ -20,7 +22,7 @@ const viewFromLocation = (): View => (window.location.search.includes(DETAILS_QU
 /**
  * The deterministic contract surface: plain controls with every state
  * exposed, one exercise per agent verb the hard scenarios never reach (a
- * checkbox and a radio to set, a long press and a double click to tell from a
+ * checkbox and a radio to set, a radio the pick replaces with its summary, a long press and a double click to tell from a
  * tap, a context menu that opens on right-click only, a file input, the
  * browser history, a paragraph to scroll into view). Not a hard surface: each
  * control reports its state in a status line, and the success message shows
@@ -30,6 +32,7 @@ const viewFromLocation = (): View => (window.location.search.includes(DETAILS_QU
 export default function ControlInventory() {
   const [agreed, setAgreed] = useState(false);
   const [size, setSize] = useState<Size | null>(null);
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [holdState, setHoldState] = useState("none");
   const [longPressed, setLongPressed] = useState(false);
   const [doubleClickState, setDoubleClickState] = useState("none");
@@ -75,6 +78,7 @@ export default function ControlInventory() {
   const done =
     agreed &&
     size === "Medium" &&
+    delivery === "Express" &&
     longPressed &&
     doubleClicked &&
     renamed &&
@@ -120,7 +124,7 @@ export default function ControlInventory() {
         </p>
       ) : null}
       <p style={styles.hint}>
-        Plain controls, one exercise each. Agree to the terms and pick the Medium size; hold the Hold me button, then
+        Plain controls, one exercise each. Agree to the terms and pick the Medium size; pick Express delivery; hold the Hold me button, then
         double-click the Double-click me button; rename report.pdf to summary.pdf through its context menu, which opens
         on right-click only; attach a file; open the details and return with the browser history; bring the footnote at
         the bottom into view.
@@ -130,6 +134,10 @@ export default function ControlInventory() {
         <dt style={styles.statusTerm}>Toggles</dt>
         <dd style={styles.statusValue}>
           <output aria-label="Toggles state">{`${agreed ? "terms agreed" : "terms not agreed"}, size ${size ?? "unset"}`}</output>
+        </dd>
+        <dt style={styles.statusTerm}>Delivery</dt>
+        <dd style={styles.statusValue}>
+          <output aria-label="Delivery state">{delivery ?? "unset"}</output>
         </dd>
         <dt style={styles.statusTerm}>Hold</dt>
         <dd style={styles.statusValue}>
@@ -181,6 +189,24 @@ export default function ControlInventory() {
                 </label>
               ))}
             </fieldset>
+            {delivery === null ? (
+              <fieldset style={styles.fieldset}>
+                <legend style={styles.legend}>Delivery</legend>
+                {DELIVERIES.map((option) => (
+                  <label key={option} style={styles.checkRow}>
+                    <input type="radio" name="delivery" value={option} checked={false} onChange={() => setDelivery(option)} />
+                    {option}
+                  </label>
+                ))}
+              </fieldset>
+            ) : (
+              <div style={styles.checkRow}>
+                <span style={styles.text}>{`${delivery} delivery selected`}</span>
+                <button type="button" style={styles.button} onClick={() => setDelivery(null)}>
+                  Change delivery
+                </button>
+              </div>
+            )}
           </section>
 
           <section aria-label="Gestures" style={styles.section}>

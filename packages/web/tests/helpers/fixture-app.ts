@@ -174,8 +174,11 @@ const STATE = `<!doctype html>
 /**
  * Every node of interest twice: a hidden copy first, then the copy a person
  * sees, the way a framework keeps a prerendered segment around after a reload.
- * The paragraph pair and the panel pair are hidden only by `aria-hidden`,
- * which Playwright's own visibility filter does not see.
+ * The paragraph pair and the panel pair are hidden by `visibility: hidden`,
+ * which the hidden panel's child overrides, so only the panel scope hides it.
+ * The decorative spinner is `aria-hidden` and still paints, so it is visible.
+ * The contents twin's text sits under a `display: contents` element with
+ * `visibility: hidden`, which paints nothing though Playwright calls it visible.
  */
 const TWINS = `<!doctype html>
 <html>
@@ -194,7 +197,9 @@ const TWINS = `<!doctype html>
   <span data-testid="memory-empty">empty</span>
   <button>Save</button>
 </section>
-<p aria-hidden="true">Decorative twin</p>
+<p style="visibility:hidden">Decorative twin</p>
+<p aria-hidden="true">Decorative spinner</p>
+<div id="contents-twin" style="display:contents;visibility:hidden">Contents twin</div>
 <label for="required-name">Display name<span aria-hidden="true">*</span></label>
 <input id="required-name">
 <label for="infix-name">Team <span aria-hidden="true">&bull;</span> name</label>
@@ -212,7 +217,8 @@ const TWINS = `<!doctype html>
 <meter id="score" value="0.5"></meter>
 <button id="insert-field" onclick="const l=document.createElement('label');l.textContent='Inserted';const i=document.createElement('input');i.id='inserted';l.htmlFor='inserted';document.body.prepend(i);document.body.prepend(l);">Insert a field</button>
 <p>Decorative twin</p>
-<div data-testid="memory-panel" aria-hidden="true"><span>Open</span></div>
+<p id="contents-shown">Contents twin</p>
+<div data-testid="memory-panel" style="visibility:hidden"><span style="visibility:visible">Open</span></div>
 <div data-testid="memory-panel"><span>Open</span></div>
 </body>
 </html>`;

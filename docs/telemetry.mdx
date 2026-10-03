@@ -119,7 +119,7 @@ Versions:
 | `command` | `run` or `explore` |
 | `status`, `exit_code`, `duration_ms` | The run's outcome |
 | `flags` | The names of the flags given to the run command, never their values |
-| `tests_discovered`, `tests_selected`, `tests_executed`, `tests_passed`, `tests_failed`, `tests_flaky`, `tests_skipped` | The summary counts |
+| `tests_discovered`, `tests_selected`, `tests_executed`, `tests_passed`, `tests_failed`, `tests_interrupted`, `tests_flaky`, `tests_skipped` | The summary counts |
 | `attempts_total`, `tests_retried` | How many attempts the run made across tests and serial groups, and how many of them needed more than one |
 | `targets`, `platforms`, `engines` | How many targets, on which platforms, and with which engines and versions, as your config declares them: `web`, `ios`, `web@0.6.1`, or your own engine's name and version. A name that is not a plain token of letters, digits, dots, dashes, and underscores is reported as `other` |
 | `steps_total`, `steps_agent`, `steps_locator`, `steps_assertion`, `steps_screen`, `steps_app`, `steps_session`, `steps_resource` | Step counts by kind |

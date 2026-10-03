@@ -76,6 +76,15 @@ describe('runWithRetries', () => {
     expect(attempts).toEqual([0]);
   });
 
+  it('keeps the failed verdict when an interrupt cuts its retry short', async () => {
+    const status = await runWithRetries(3, liveSignal(), async (index) =>
+      index === 0 ? { status: 'failed', error: error('test') } : { status: 'interrupted' },
+    );
+    expect(status).toBe('failed');
+    const timedOut = await runWithRetries(3, liveSignal(), async (index) => ({ status: index === 0 ? 'timed-out' : 'interrupted' }));
+    expect(timedOut).toBe('timed-out');
+  });
+
   it('runs nothing when the interrupt signal is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();

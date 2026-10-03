@@ -85,8 +85,8 @@ export interface Device {
    * a web link the app does not claim goes to Safari, and the next
    * observation brings the app back. Android starts the link on that
    * package. Without an app, Android lets the OS route the link; iOS needs
-   * one (`INVALID_ARGUMENT` without). `file:`, `data:`, and `javascript:`
-   * links are `POLICY_DENIED`.
+   * one (`INVALID_ARGUMENT` without). `file:`, `data:`, `javascript:`,
+   * `view-source:`, `blob:`, and `filesystem:` links are `POLICY_DENIED`.
    */
   openLink(url: string, options?: { app?: string }): Promise<void>;
   /**
