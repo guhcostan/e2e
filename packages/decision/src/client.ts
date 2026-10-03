@@ -96,8 +96,9 @@ export function clef(options: ClefOptions): DecisionModel {
     apiKey: options.apiKey,
     model,
     envelope: 'cloudflare',
-    structured: true,
-    vision: true,
+    structured: options.structured ?? true,
+    vision: options.vision ?? true,
+    ...(options.probabilityDecimals === undefined ? {} : { probabilityDecimals: options.probabilityDecimals }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }
@@ -110,11 +111,11 @@ export function jev(options: JevOptions): DecisionModel {
     apiKey: options.apiKey,
     model: options.model ?? 'jev-latest',
     // The TypeSafe API accepts structured instructions and criteria values.
-    structured: true,
+    structured: options.structured ?? true,
     // TypeSafe rounds probabilities to two places (its AI SDK provider
     // declares the same), so a long distribution need not sum to exactly 1.
-    probabilityDecimals: 2,
-    vision: false,
+    probabilityDecimals: options.probabilityDecimals ?? 2,
+    vision: options.vision ?? false,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 }

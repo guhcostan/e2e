@@ -154,4 +154,16 @@ describe('System One transports', () => {
       .decide({ ...request, images: ['data:image/png;base64,AQID', 'not-an-image'] });
     expect(JSON.parse(String(vision.mock.calls[0]?.[1]?.body)).images).toEqual(['data:image/png;base64,AQID']);
   });
+  it('lets callers override the native transport flags', async () => {
+    expect(clef({ accountId: 'test', apiKey: 'credential', vision: false }).vision).toBe(false);
+    expect(jev({ apiKey: 'credential', vision: true }).vision).toBe(true);
+    expect(clef({ accountId: 'test', apiKey: 'credential', structured: false }).structured).toBe(false);
+    const image = 'data:image/png;base64,AQID';
+    const dark = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ success: true, result }));
+    await clef({ accountId: 'test', apiKey: 'credential', vision: false, fetch: dark }).decide({ ...request, images: [image] });
+    expect(JSON.parse(String(dark.mock.calls[0]?.[1]?.body))).not.toHaveProperty('images');
+    const sighted = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    await jev({ apiKey: 'credential', vision: true, fetch: sighted }).decide({ ...request, images: [image] });
+    expect(JSON.parse(String(sighted.mock.calls[0]?.[1]?.body)).images).toEqual([image]);
+  });
 });

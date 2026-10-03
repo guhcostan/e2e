@@ -154,7 +154,7 @@ provenance enter the report through the executor accounting API. HTTP failures
 use `MODEL_PROVIDER_FAILED`; response bodies and credentials never enter
 error messages. There are no transport retries in this package.
 
-## Vision (Clef only)
+## Vision
 
 The executor is text-only by default: it sends the redacted semantic tree as
 text and never requests pixels. Pass `vision: true` to also attach the masked
@@ -165,11 +165,14 @@ const executor = decisionExecutor({ model, vision: true });
 ```
 
 Screenshots travel as the System One `images` array, alongside the state, as
-embedded PNG data URLs. Only models that declare vision receive them: `clef()`
-does, while `jev()` is text-only and never gets pixels, even with `vision: true`.
-A compatible endpoint receives images only when built with `vision: true`. AI
-SDK evaluation models stay text-only too: the evaluation call has no image
-input, so the executor never requests pixels for them.
+embedded PNG data URLs. Both sides opt in: the executor flag above, and a
+transport that declares vision. `clef()` declares it; `jev()` is text-only
+unless a future endpoint accepts images, in which case `jev({ vision: true })`
+opts in the same way. A compatible endpoint receives images only when built
+with `systemOne({ vision: true })`. To keep a transport text-only no matter
+what the executor asks, pass `vision: false`: `clef({ vision: false })` never
+sends screenshots. AI SDK evaluation models stay text-only too: the evaluation
+call has no image input, so the executor never requests pixels for them.
 
 Pixels degrade instead of failing the step. When the engine withholds them, or
 after a secret fill taints the viewport, the step decides from semantic text

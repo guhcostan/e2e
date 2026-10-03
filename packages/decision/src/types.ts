@@ -75,6 +75,12 @@ export interface ClefOptions {
   readonly apiKey: string;
   /** Defaults to 'clef-flash'. */
   readonly model?: 'clef' | 'clef-flash';
+  /** Defaults to true. Set false to talk to the endpoint with flat strings. */
+  readonly structured?: boolean;
+  /** Defaults to true. Set false and the transport never sends screenshots. */
+  readonly vision?: boolean;
+  /** Decimal places the endpoint rounds probabilities to, an integer from 0 to 15. Omit for full precision. */
+  readonly probabilityDecimals?: number;
   readonly fetch?: typeof fetch;
 }
 
@@ -82,6 +88,12 @@ export interface ClefOptions {
 export interface JevOptions {
   readonly apiKey: string;
   readonly model?: string;
+  /** Defaults to true. Set false to talk to the endpoint with flat strings. */
+  readonly structured?: boolean;
+  /** Defaults to 2, the rounding TypeSafe's AI SDK provider declares. */
+  readonly probabilityDecimals?: number;
+  /** Defaults to false. Set true when the endpoint accepts the System One `images` array. */
+  readonly vision?: boolean;
   readonly fetch?: typeof fetch;
 }
 

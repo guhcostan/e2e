@@ -17,7 +17,10 @@ dispatches directly. Acting decisions see the step's action history, and the
 same action on the same screen three times anywhere in the step blocks it.
 Probability and confidence gates are opt-in. A `complete` choice passes only
 after an independent judgment on a fresh screen. An opt-in `vision: true`
-attaches the masked viewport screenshot for transports that declare vision
-(Clef); Jev and AI SDK evaluation models stay text-only, and withheld or
+attaches the masked viewport screenshot for transports that declare vision.
+`clef()` declares it and `jev()` stays text-only, but both accept
+`structured`, `vision`, and `probabilityDecimals` overrides, so a future
+vision-capable Jev endpoint (or a Clef run kept text-only) needs no new
+transport. AI SDK evaluation models stay text-only, and withheld or
 tainted viewports fall back to semantic text. Secrets, node authorization,
 navigation policy, and action budgets follow the runner's existing contracts.
