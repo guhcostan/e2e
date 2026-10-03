@@ -483,6 +483,27 @@ describe('context', () => {
     expect(history[0]).toMatchObject({ action: 'tap button Save', replayed: true });
     expect(history[1]).toMatchObject({ action: 'type Name', uncertain: true });
   });
+  it('keeps secret handles out of replayed summaries', async () => {
+    const { model, requests } = scriptedEvaluation((id, keys) => ({
+      choice: id === 'operation' ? 'done' : id === 'verdict' ? 'holds' : (keys[0] ?? ''),
+    }));
+    const fixture = context({
+      tree: BUTTONS,
+      replayedPrefix: {
+        replayedActions: ['fill secret "password" into textbox "Password"'],
+        totalActions: 2,
+        stopReason: 'action-uncertain',
+        uncertainAction: 'tap button "Sign in"',
+      },
+    });
+    await decisionExecutor({ model }).runStep(fixture.ctx);
+    const redacted = 'fill secret <secret> into textbox "Password"';
+    const decision = requests[0]?.state as { recentActions: { action: string }[] };
+    expect(decision.recentActions[0]?.action).toBe(redacted);
+    const check = requests[1]?.state as { actions: string[] };
+    expect(check.actions[0]).toBe(redacted);
+    expect(JSON.stringify(requests.map((request) => request.state))).not.toContain('secret \\"password\\"');
+  });
   it('sends only the last 10 actions', async () => {
     const { model, requests } = scriptedEvaluation((id, keys, call) => ({
       choice: id === 'operation' ? (call < 12 ? 'tap' : 'done') : id === 'verdict' ? 'holds' : (keys[0] ?? ''),

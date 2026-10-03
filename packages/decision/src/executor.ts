@@ -300,13 +300,20 @@ function need(answer: Decision | undefined, what: string): Decision {
   if (answer === undefined) throw invalid(`The decision model returned no ${what} answer.`);
   return answer;
 }
-/** Seeds history from a replayed prefix, flagging the uncertain action. */
+/**
+ * Seeds history from a replayed prefix, flagging the uncertain action. The
+ * runner's summaries name a filled secret's handle (`fill secret "admin.password"
+ * into ...`); secret names reach the model only as `secret` question
+ * criteria, so the summaries carry `<secret>` instead.
+ */
 function seedHistory(ctx: StepExecutorContext): HistoryEntry[] {
   const prefix = ctx.replayedPrefix;
   if (prefix === undefined) return [];
-  const seeded: HistoryEntry[] = prefix.replayedActions.map((action) => ({ action, replayed: true as const }));
+  const names = ctx.step.secrets.map((secret) => JSON.stringify(secret.name));
+  const redact = (summary: string): string => names.reduce((text, name) => text.replaceAll(name, '<secret>'), summary);
+  const seeded: HistoryEntry[] = prefix.replayedActions.map((action) => ({ action: redact(action), replayed: true as const }));
   if (prefix.uncertainAction !== undefined) {
-    seeded.push({ action: prefix.uncertainAction, replayed: true, uncertain: true });
+    seeded.push({ action: redact(prefix.uncertainAction), replayed: true, uncertain: true });
   }
   return seeded;
 }
