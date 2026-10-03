@@ -4,10 +4,11 @@ description: Run bounded actions with a decision model and a small text model in
 ---
 
 `@e2e-dev/decision` runs `agent.act` and `agent.assert` through a decision
-model instead of an LLM. A decision model answers one question per action —
-which operation, then which element — from choices the executor builds out
-of the latest semantic tree. It never generates free text: when the choice
-is `type`, a small language model writes the field value. Both models are
+model instead of an LLM. For each action the decision model answers one
+request: which operation, and which element for each operation that has
+more than one, chosen from what the executor builds out of the latest
+semantic tree. It never generates free text: when the choice is `type`, a
+small language model writes the field value. Both models are
 plain AI SDK models, so any evaluation provider that answers `choice`
 questions with probability distributions (Jev) and any language-model
 provider works; the runner still authorizes every dispatched action.
