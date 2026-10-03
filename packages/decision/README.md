@@ -6,6 +6,7 @@ distributions (e.g. TypeSafe Jev), plus a small language model that writes
 field values when the decision model picks `type`.
 
 ```ts
+import type { E2EConfig } from 'e2e';
 import { decisionExecutor } from '@e2e-dev/decision';
 import { typeSafeAi } from '@ai-sdk/typesafe-ai';
 import { openrouter } from '@openrouter/ai-sdk-provider';
@@ -26,7 +27,8 @@ Set `agents.default.executor` in the e2e config. Tests stay plain natural
 language, with no params needed. One `experimental_evaluate` call per action
 asks the operation plus one target question per operation; operations with a
 single target dispatch without a question. The text model is also the agent's
-judgment tier (`waitFor`, `extract`); without it, `type` is never offered.
+judgment tier (`waitFor`, `extract`); without a text model or a configured agent
+`model`, `type` is never offered.
 
 The runner authorizes every dispatched action and records every model call
 against the step budget. Secrets stay declared handles filled only through

@@ -50,6 +50,19 @@ describe("element table", () => {
     ] }]);
     expect([...(space.targets.get("select")?.keys() ?? [])]).toEqual(["1:0"]);
   });
+  it("counts options dropped with their rows and past the choice cap", () => {
+    const children = Array.from({ length: 260 }, (_, index) => ({
+      id: "s" + index, role: "combobox", name: "Size " + index, children: [
+        { id: "a" + index, role: "option", name: "Small" },
+        { id: "b" + index, role: "option", name: "Large" },
+      ],
+    }));
+    const space = spaceFor(children);
+    expect(space.elements).toHaveLength(255);
+    // 5 dropped rows + 255 options past the per-question cap in kept rows
+    // + 10 options inside the 5 dropped rows.
+    expect(space.omitted).toBe(5 + 255 + 10);
+  });
   it("keeps password fields under typeSecret only", () => {
     const space = spaceFor([{ id: "p", role: "textbox", name: "Password", inputPurpose: "password" }]);
     expect(space.targets.get("type")).toBeUndefined();

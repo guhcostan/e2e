@@ -152,10 +152,22 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
     elements,
     targets,
     controls,
-    omitted: omitted + selectOverflow,
+    omitted: omitted + selectOverflow + droppedOptions(ordered),
     pageText: clip(pageText.join('\n'), 6000),
     fingerprint: fingerprint(observation.path ?? '', observation.tree),
   };
+}
+
+/** Enabled options inside rows dropped past the element cap: also unavailable choices. */
+function droppedOptions(ordered: readonly { node: ExecutorNode; operations: Operation[] }[]): number {
+  let count = 0;
+  for (const row of ordered.slice(MAX_CHOICES)) {
+    if (!row.operations.includes('select')) continue;
+    for (const child of row.node.children ?? []) {
+      if (child.role === 'option' && child.states?.hidden !== true && child.states?.disabled !== true) count += 1;
+    }
+  }
+  return count;
 }
 
 /** Binds one element operation to the runner's actions. */
