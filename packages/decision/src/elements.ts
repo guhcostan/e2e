@@ -23,6 +23,8 @@ export interface Target {
   readonly description: string;
   /** Text for `type`, the secret name for `typeSecret`, nothing otherwise. */
   run(argument?: string): Promise<void>;
+  /** Native-select option label, set only for `select` options; names the choice criterion. */
+  readonly optionLabel?: string;
 }
 
 export interface ActionSpace {
@@ -30,7 +32,7 @@ export interface ActionSpace {
   /** Per operation: target key -> bound target. Only operations with at least one target appear. */
   readonly targets: ReadonlyMap<Operation, ReadonlyMap<string, Target>>;
   readonly controls: ReadonlyMap<Control, Target>;
-  /** Elements left out to stay under the per-question cap. */
+  /** Elements and select options left out to stay under the per-question cap. */
   readonly omitted: number;
   /** Non-interactive page text from the tree, without node ids, clipped to 6000 chars. */
   readonly pageText: string;
@@ -93,21 +95,34 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
   const omitted = Math.max(0, ordered.length - MAX_CHOICES);
   const kept = ordered.slice(0, MAX_CHOICES);
   const targets = new Map<Operation, Map<string, Target>>();
+  let selectCount = 0;
+  let selectOverflow = 0;
   const elements: Element[] = kept.map((row, position) => {
     const index = String(position + 1);
     const label = clip(nodeLabel(row.node), 120);
     for (const operation of row.operations) {
       if (operation === 'select') {
         const options = new Map<string, Target>();
-        (row.node.children ?? []).forEach((child, optionIndex) => {
-          if (child.role !== 'option') return;
+        for (const [optionIndex, child] of (row.node.children ?? []).entries()) {
+          if (child.role !== 'option') continue;
+          // An option the page hides or disables is no choice: the native
+          // select cannot perform it, so the model must never see it.
+          if (child.states?.hidden === true || child.states?.disabled === true) continue;
+          // Every select shares one target group and one question, so options
+          // count against the same per-question cap as elements.
+          if (selectCount >= MAX_CHOICES) {
+            selectOverflow += 1;
+            continue;
+          }
           const key = `${index}:${optionIndex}`;
           const optionLabel = child.name ?? child.text ?? '';
           options.set(key, {
             description: `select option ${JSON.stringify(optionLabel)} in ${label} [${row.node.id}]`,
+            optionLabel,
             run: () => ctx.actions.select({ id: row.node.id }, optionLabel),
           });
-        });
+          selectCount += 1;
+        }
         if (options.size > 0) targets.set('select', new Map([...(targets.get('select') ?? new Map<string, Target>()), ...options]));
       } else {
         const key = index;
@@ -137,7 +152,7 @@ export function actionSpace(ctx: StepExecutorContext, observation: { path?: stri
     elements,
     targets,
     controls,
-    omitted,
+    omitted: omitted + selectOverflow,
     pageText: clip(pageText.join('\n'), 6000),
     fingerprint: fingerprint(observation.path ?? '', observation.tree),
   };

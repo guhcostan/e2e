@@ -14,7 +14,7 @@ const FIELD: ExecutorNode = { id: "root", children: [
   { id: "save", role: "button", name: "Save" },
 ]};
 
-/** Answers the operation question with  at full confidence. */
+/** Construction-time validation: gates and model support. */
 describe("construction", () => {
   it("rejects gates outside [0, 1]", () => {
     const { model } = scriptedEvaluation(() => ({ choice: "done" }));
@@ -211,6 +211,41 @@ describe("terminal checks", () => {
     expect(JSON.stringify(check?.state)).toContain("tap");
     expect(JSON.stringify(check?.state)).not.toContain("recentActions");
   });
+  it("retries the claim when the check screen is incomplete", async () => {
+    const { model, requests } = scriptedEvaluation((id, keys, call) => ({
+      choice: id === "operation" ? (call === 0 ? "done" : "done") : id === "verdict" ? "holds" : (keys[0] ?? ""),
+    }));
+    const fixture = context({ tree: BUTTONS });
+    const good = { revision: "1", text: "#save button", truncated: false, viewport: { width: 800, height: 600 }, tree: BUTTONS };
+    fixture.observe
+      .mockResolvedValueOnce(good)
+      .mockResolvedValueOnce({ ...good, treeUnavailable: true })
+      .mockResolvedValue(good);
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: "passed" });
+    // No verdict request goes out for the incomplete screen: the claim is
+    // retried on the next loop instead of passing or failing the step.
+    expect(requests.filter((request) => "verdict" in request.questions)).toHaveLength(1);
+  });
+  it("names select options in the target criteria", async () => {
+    const tree: ExecutorNode = { id: "root", children: [
+      { id: "size", role: "combobox", name: "Size", children: [
+        { id: "s", role: "option", name: "Small" },
+        { id: "l", role: "option", name: "Large" },
+      ] },
+      { id: "save", role: "button", name: "Save" },
+    ] };
+    const { model, requests } = scriptedEvaluation((id, keys, call) => ({
+      choice: id === "operation" ? (call === 0 ? "select" : "done") : id === "verdict" ? "holds" : (keys[0] ?? ""),
+    }));
+    const fixture = context({ tree });
+    await decisionExecutor({ model }).runStep(fixture.ctx);
+    const criteria = requests[0]?.questions["select_target"]?.criteria as Record<string, unknown>;
+    expect(Object.values(criteria)).toEqual([
+      { element: "Small", role: "option" },
+      { element: "Large", role: "option" },
+    ]);
+  });
 });
 
 describe("guard rails", () => {
@@ -336,6 +371,14 @@ describe("model failures", () => {
     const fixture = context({ tree: BUTTONS });
     await expect(decisionExecutor({ model }).runStep(fixture.ctx)).rejects.toMatchObject({ code: "MODEL_OUTPUT_INVALID" });
   });
+  it("fails a probability outside [0, 1]", async () => {
+    const { model } = scriptedEvaluation((id, keys) => {
+      if (id !== "operation") return { choice: keys[0] ?? "" };
+      return { choice: "tap", probabilities: Object.fromEntries(keys.map((key) => [key, key === "tap" ? 1.5 : key === "done" ? -0.5 : 0])) };
+    });
+    const fixture = context({ tree: BUTTONS });
+    await expect(decisionExecutor({ model }).runStep(fixture.ctx)).rejects.toMatchObject({ code: "MODEL_OUTPUT_INVALID" });
+  });
   it("maps provider failures without provider text", async () => {
     const { model } = scriptedEvaluation(() => ({ choice: "tap" }), { throws: new Error("upstream detail") });
     const fixture = context({ tree: BUTTONS });
@@ -389,12 +432,17 @@ describe("context", () => {
     const fixture = context({
       tree: BUTTONS,
       ledger: "previous step done",
-      params: { city: "Lisbon", password: { kind: "secret", name: "admin.password", purpose: "password" } },
+      params: {
+        city: "Lisbon",
+        password: { kind: "secret", name: "admin.password", purpose: "password" },
+        nested: { theme: "dark", token: { kind: "secret", name: "nested.token", purpose: "token" } },
+      },
     });
     await decisionExecutor({ model }).runStep(fixture.ctx);
     const state = requests[0]?.state as Record<string, unknown>;
-    expect(state).toMatchObject({ previousSteps: "previous step done", params: { city: "Lisbon" } });
+    expect(state).toMatchObject({ previousSteps: "previous step done", params: { city: "Lisbon", nested: { theme: "dark" } } });
     expect(JSON.stringify(state)).not.toContain("admin.password");
+    expect(JSON.stringify(state)).not.toContain("nested.token");
   });
   it("seeds history from a replayed prefix and flags the uncertain action", async () => {
     const { model, requests } = scriptedEvaluation((id, keys, call) => ({

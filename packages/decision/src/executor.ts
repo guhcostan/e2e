@@ -180,15 +180,25 @@ async function run(ctx: StepExecutorContext, options: DecisionExecutorOptions, m
   async function terminalCheck(claim: "done" | "failed"): Promise<StepVerdict | undefined> {
     const observation = await ctx.observe({ tree: true });
     const path = observation.path ?? "";
-    const treed = observation.tree === undefined || observation.treeUnavailable ? undefined : actionSpace(ctx, { path, viewport: observation.viewport, tree: observation.tree }, false);
-    const request = verdictRequest(ctx.step.instruction, path, treed?.pageText ?? "", treed === undefined ? undefined : elementRecords(treed), history.map((entry) => entry.action));
+    if (observation.treeUnavailable || observation.tree === undefined || emptyTree(observation)) {
+      return rejectClaim(claim, "incomplete observation");
+    }
+    const treed = actionSpace(ctx, { path, viewport: observation.viewport, tree: observation.tree }, false);
+    const request = verdictRequest(ctx.step.instruction, path, treed.pageText, elementRecords(treed), history.map((entry) => entry.action));
     const answers = await ask(request);
     if (answers === undefined) return blocked(budgetMessage());
     const verdict = need(answers.verdict, "verdict");
     if (claim === "done" && verdict.choice === "holds") return { status: "passed", summary: "The screen shows the step is done (" + describe(verdict) + ")." };
     if (claim === "failed" && verdict.choice === "fails") return { status: "failed", errorCode: "ACTION_FAILED", summary: "The screen shows the step failed (" + describe(verdict) + ")." };
+    return rejectClaim(claim, verdict.choice);
+  }
+  /**
+   * Records a rejected terminal claim and continues the loop. The second
+   * rejected claim in a step ends it instead.
+   */
+  function rejectClaim(claim: "done" | "failed", reason: string): StepVerdict | undefined {
     rejectedTerminals += 1;
-    history.push({ action: claim, error: "check: " + verdict.choice });
+    history.push({ action: claim, error: "check: " + reason });
     if (rejectedTerminals >= 2) {
       return claim === "failed"
         ? { status: "failed", errorCode: "ACTION_FAILED", summary: "A failed claim the screen does not confirm." }

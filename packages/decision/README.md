@@ -1,39 +1,38 @@
 # @e2e-dev/decision
 
-Run `agent.act` and `agent.assert` with a decision model instead of an LLM:
-any AI SDK evaluation model with choice distributions, or a System One
-endpoint such as Cloudflare Clef, TypeSafe Jev, or a self-hosted model.
+Run `agent.act` and `agent.assert` through a decision model instead of an LLM:
+any AI SDK evaluation model that answers `choice` questions with probability
+distributions (e.g. TypeSafe Jev), plus a small language model that writes
+field values when the decision model picks `type`.
 
 ```ts
-import { clef, decisionExecutor } from '@e2e-dev/decision';
+import { decisionExecutor } from '@e2e-dev/decision';
 import { typeSafeAi } from '@ai-sdk/typesafe-ai';
+import { openrouter } from '@openrouter/ai-sdk-provider';
 
-// Through AI SDK experimental_evaluate (needs the ai package):
-const jevExecutor = decisionExecutor({ model: typeSafeAi.evaluationModel('jev-latest') });
-
-// Through the built-in Cloudflare transport:
-const clefExecutor = decisionExecutor({
-  model: clef({
-    accountId: process.env.CLOUDFLARE_ACCOUNT_ID ?? '',
-    apiKey: process.env.CLOUDFLARE_AUTH_TOKEN ?? '',
-  }),
-});
+export default {
+  agents: {
+    default: {
+      executor: decisionExecutor({
+        model: typeSafeAi.evaluationModel('jev-latest'),
+        textModel: openrouter('inception/mercury-2.5'),
+      }),
+    },
+  },
+} satisfies E2EConfig;
 ```
 
-Set `agents.default.executor` in the e2e config. The built-in transports are
-`clef()`, `jev({ apiKey })`, and `systemOne({ endpoint, apiKey, model,
-provider })` for a compatible server; they need no AI SDK, and
-`evaluationModel()` exposes them to `experimental_evaluate`.
+Set `agents.default.executor` in the e2e config. Tests stay plain natural
+language, with no params needed. One `experimental_evaluate` call per action
+asks the operation plus one target question per operation; operations with a
+single target dispatch without a question. The text model is also the agent's
+judgment tier (`waitFor`, `extract`); without it, `type` is never offered.
 
-Actions choose their node and arguments from the latest redacted semantic
-tree and the test's string params. Secrets remain handles filled through the
-runner. A completion choice must pass an independent fresh-screen judgment.
-Probability and confidence gates are opt-in through `minProbability` and
-`minConfidence`. Every step calls the model; the executor opts out of the
-replay cache.
+The runner authorizes every dispatched action and records every model call
+against the step budget. Secrets stay declared handles filled only through
+`typeSecret`; password fields never reach the text model. `minProbability`
+and `minConfidence` gates are off by default. A `done`/`failed` claim passes
+an independent fresh-screen check before it concludes the step.
 
-Text generation, `waitFor`, and `extract` are outside this executor. Pixels are
-opt-in through `vision: true` on vision transports (Clef); Jev and AI SDK
-evaluation models stay text-only.
 See the [decision models guide](https://e2e.tester.army/docs/decision-models)
-for supported actions, provider setup, policy gates, and the 255-choice limit.
+for setup, gates, and limits (no vision, no `navigate`, the 255-choice cap).

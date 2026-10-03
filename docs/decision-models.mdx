@@ -8,7 +8,8 @@ model instead of an LLM. A decision model answers one question per action —
 which operation, then which element — from choices the executor builds out
 of the latest semantic tree. It never generates free text: when the choice
 is `type`, a small language model writes the field value. Both models are
-plain AI SDK models, so any evaluation provider (Jev) and any language-model
+plain AI SDK models, so any evaluation provider that answers `choice`
+questions with probability distributions (Jev) and any language-model
 provider works; the runner still authorizes every dispatched action.
 
 ## Install and configure

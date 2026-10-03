@@ -1,4 +1,4 @@
-import { generateText, Output } from "ai";
+import { generateText, InvalidArgumentError, InvalidResponseDataError, JSONParseError, LoadAPIKeyError, NoObjectGeneratedError, Output, TypeValidationError } from "ai";
 import type { LanguageModel } from "ai";
 import type { SharedV4ProviderOptions } from "@ai-sdk/provider";
 import { AgentError, isAgentError } from "e2e/agent";
@@ -44,7 +44,8 @@ export async function fieldText(ctx: StepExecutorContext, model: Exclude<Languag
     ctx.signal.throwIfAborted();
     inputTokens = result.usage.inputTokens;
     outputTokens = result.usage.outputTokens;
-    const text = result.output?.text ?? null;
+    const text = result.output?.text;
+    if (text === undefined) throw new AgentError("MODEL_OUTPUT_INVALID", "The field-text model returned no value.");
     return text === "" ? null : text;
   } catch (error) {
     throw textError(error, ctx.signal);
@@ -56,5 +57,8 @@ export async function fieldText(ctx: StepExecutorContext, model: Exclude<Languag
 function textError(error: unknown, signal: AbortSignal): unknown {
   signal.throwIfAborted();
   if (isAgentError(error)) return error;
+  if (LoadAPIKeyError.isInstance(error)) return new AgentError("MODEL_UNAVAILABLE", "Set the field-text model API key.");
+  if (InvalidArgumentError.isInstance(error)) return error;
+  if (InvalidResponseDataError.isInstance(error) || TypeValidationError.isInstance(error) || JSONParseError.isInstance(error) || NoObjectGeneratedError.isInstance(error)) return new AgentError("MODEL_OUTPUT_INVALID", "The field-text model returned an invalid value.");
   return new AgentError("MODEL_PROVIDER_FAILED", "The field-text call failed.");
 }

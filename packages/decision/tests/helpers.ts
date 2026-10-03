@@ -62,7 +62,9 @@ export function scriptedText(texts: (string | null)[]): { model: Exclude<Languag
     modelId: "scripted-text-1",
     doGenerate: async (options: { prompt?: unknown }) => {
       prompts.push(options.prompt);
-      const text = queue.length === 0 ? null : queue.shift();
+      // Exhaustion throws: queue an explicit null for the goal-supplies-no-value case.
+      const text = queue.shift();
+      if (text === undefined) throw new Error("scriptedText exhausted: the executor asked for more field values than queued.");
       return {
         content: [{ type: "text", text: JSON.stringify({ text }) }],
         finishReason: { unified: "stop" as const },

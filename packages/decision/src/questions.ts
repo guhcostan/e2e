@@ -63,8 +63,15 @@ export function decisionRequest(ctx: StepExecutorContext, space: ActionSpace, hi
     if (targets.size < 2) continue;
     const options: Record<string, JsonValue | null> = {};
     for (const [key, target] of targets) {
-      const element = space.elements.find((item) => item.index === targetKeyIndex(key));
-      options[key] = element === undefined ? target.description : { element: element.label, role: element.role, ...(element.value === undefined ? {} : { value: element.value }) };
+      if (operation === "select") {
+        // Every option under one select shares the parent row, so the
+        // parent description cannot tell options apart. Name the option.
+        const label = target.optionLabel;
+        options[key] = label === undefined || label === "" ? target.description : { element: label, role: "option" };
+      } else {
+        const element = space.elements.find((item) => item.index === targetKeyIndex(key));
+        options[key] = element === undefined ? target.description : { element: element.label, role: element.role, ...(element.value === undefined ? {} : { value: element.value }) };
+      }
     }
     questions[operation + "_target"] = { type: "choice", instructions: { operation, rules: TARGET }, criteria: options };
   }
@@ -92,10 +99,35 @@ function decisionState(ctx: StepExecutorContext, space: ActionSpace, history: re
 export function nonSecretParams(params: Readonly<Record<string, JsonValue>> | undefined): Record<string, JsonValue> {
   const kept: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(params ?? {})) {
-    if (typeof value === "object" && value !== null && !Array.isArray(value) && (value as Record<string, JsonValue>)["kind"] === "secret") continue;
-    kept[key] = value;
+    const cleaned = withoutSecret(value);
+    if (cleaned === undefined) continue;
+    setKey(kept, key, cleaned);
   }
   return kept;
+}
+/** Removes secret-marker leaves at any depth. Undefined means the value itself was one. */
+function withoutSecret(value: JsonValue): JsonValue | undefined {
+  if (Array.isArray(value)) return value.map((item) => withoutSecret(item) ?? null);
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, JsonValue>;
+    if (record["kind"] === "secret") return undefined;
+    const kept: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(record)) {
+      const cleaned = withoutSecret(item);
+      if (cleaned === undefined) continue;
+      setKey(kept, key, cleaned);
+    }
+    return kept;
+  }
+  return value;
+}
+/** Assigns an own property even for `__proto__`, which a plain assignment would not create. */
+function setKey(record: Record<string, JsonValue>, key: string, value: JsonValue): void {
+  if (key === "__proto__") {
+    Object.defineProperty(record, key, { value, enumerable: true, configurable: true, writable: true });
+  } else {
+    record[key] = value;
+  }
 }
 /** Element index behind a target key (`7` for both `7` and `7:2`). */
 export function targetKeyIndex(key: string): string {

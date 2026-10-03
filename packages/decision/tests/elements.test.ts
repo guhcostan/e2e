@@ -42,6 +42,14 @@ describe("element table", () => {
     expect([...(space.targets.get("select")?.keys() ?? [])]).toEqual(["1:0", "1:1"]);
     expect(space.elements[0]).toMatchObject({ operations: ["select"] });
   });
+  it("skips hidden and disabled options", () => {
+    const space = spaceFor([{ id: "s", role: "combobox", name: "Size", children: [
+      { id: "o1", role: "option", name: "Small" },
+      { id: "o2", role: "option", name: "Hidden", states: { hidden: true } },
+      { id: "o3", role: "option", name: "Off", states: { disabled: true } },
+    ] }]);
+    expect([...(space.targets.get("select")?.keys() ?? [])]).toEqual(["1:0"]);
+  });
   it("keeps password fields under typeSecret only", () => {
     const space = spaceFor([{ id: "p", role: "textbox", name: "Password", inputPurpose: "password" }]);
     expect(space.targets.get("type")).toBeUndefined();
@@ -73,14 +81,18 @@ describe("element table", () => {
     expect([...(space.targets.get("tap")?.keys() ?? [])]).toEqual(["1"]);
   });
   it("caps the table past 255, viewport first, and counts the omitted", () => {
+    // Out-of-viewport nodes come first in tree order, so only a real
+    // viewport-first sort puts the ten visible rows at the head.
     const children = Array.from({ length: 300 }, (_, index) => ({
       id: "n" + index, role: "button", name: "Button " + index,
-      rect: { x: 0, y: index < 10 ? 10 : 5000, width: 50, height: 20 },
+      rect: { x: 0, y: index < 290 ? 5000 : 10, width: 50, height: 20 },
     }));
     const space = spaceFor(children);
     expect(space.elements).toHaveLength(255);
     expect(space.omitted).toBe(45);
-    expect(space.elements.slice(0, 10).every((element) => element.label.startsWith("Button "))).toBe(true);
+    expect(space.elements.slice(0, 10).map((element) => element.label)).toEqual(
+      Array.from({ length: 10 }, (_, position) => "Button " + (290 + position)),
+    );
     expect([...(space.targets.get("tap")?.keys() ?? [])]).toHaveLength(255);
   });
   it("offers scroll and back controls when the engine declares them", () => {

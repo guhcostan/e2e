@@ -18,7 +18,7 @@ export interface DecisionExecutorOptions {
    * is never offered.
    */
   readonly textModel?: Exclude<LanguageModel, string>;
-  /** Minimum probability of the chosen operation and target. Default 0 (off). */
+  /** Minimum probability for a selected operation, target, secret, or assertion verdict. Default 0 (off). */
   readonly minProbability?: number;
   /** Minimum provider-reported confidence. Default 0 (off). A model that reports none counts as 0. */
   readonly minConfidence?: number;

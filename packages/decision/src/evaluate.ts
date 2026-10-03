@@ -49,7 +49,9 @@ export async function evaluate(ctx: StepExecutorContext, model: Experimental_Eva
     const id = entry[0];
     const answer = entry[1];
     if (answer === undefined || answer.type !== "choice" || answer.probabilities === undefined) throw new AgentError("MODEL_OUTPUT_INVALID", "The decision model returned an answer without a choice distribution.");
-    decisions[id] = { choice: answer.choice ?? "", probability: answer.choice === undefined ? 0 : (answer.probabilities[answer.choice] ?? 0), confidence: reportedConfidence(providerMetadata, id) };
+    const probability = answer.choice === undefined ? 0 : (answer.probabilities[answer.choice] ?? 0);
+    if (!Number.isFinite(probability) || probability < 0 || probability > 1) throw new AgentError("MODEL_OUTPUT_INVALID", "The decision model returned a probability outside [0, 1].");
+    decisions[id] = { choice: answer.choice ?? "", probability, confidence: reportedConfidence(providerMetadata, id) };
   }
   return decisions;
 }
