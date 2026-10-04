@@ -2,8 +2,8 @@
 
 import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { WARNED_TSCONFIGS_ENV, warnedTsconfigs } from '../../config/tsconfig.ts';
 import { InfrastructureError } from '../../internal/errors.ts';
 import type { SpawnUnitRunner, UnitRunner, UnitRunnerEvents } from '../unit-runner.ts';
 import type {
@@ -13,14 +13,18 @@ import type {
   WorkerToMain,
 } from './protocol.ts';
 
-/** Resolves the worker entry for both src (vitest, .ts) and dist (.js) layouts. */
+/**
+ * Resolves the worker entry for both src (vitest, .ts) and dist (.js)
+ * layouts. From source, e2e's own loader is registered before the entry
+ * loads (`config/register.ts`): Node.js strips types but does not compile
+ * the rest of TypeScript.
+ */
 function resolveEntry(): { path: string; execArgv: string[] } {
   const js = fileURLToPath(new URL('./entry.js', import.meta.url));
   if (existsSync(js)) return { path: js, execArgv: [] };
   const ts = fileURLToPath(new URL('./entry.ts', import.meta.url));
   if (existsSync(ts)) {
-    const require = createRequire(import.meta.url);
-    return { path: ts, execArgv: ['--import', require.resolve('tsx')] };
+    return { path: ts, execArgv: ['--import', new URL('../../config/register.ts', import.meta.url).href] };
   }
   throw new InfrastructureError('WORKER_ENTRY_MISSING', 'e2e worker entry module not found');
 }
@@ -58,7 +62,8 @@ class ChildProcessRunner implements UnitRunner {
       cwd: spawn.projectRoot,
       execArgv: entry.execArgv,
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: spawn.env,
+      // Collecting read the project's tsconfig.json files first; the worker warns only about ones it reaches on its own.
+      env: { ...spawn.env, [WARNED_TSCONFIGS_ENV]: warnedTsconfigs() },
     });
     this.child.on('message', (message) => events.onMessage(message as WorkerToMain));
     this.exit = new Promise<void>((resolve) => {

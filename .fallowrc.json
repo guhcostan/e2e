@@ -20,7 +20,8 @@
     "packages/web/tests/types/routes.ts",
     "packages/mobile/tests/types/options.ts",
     "packages/decision/tests/types/options.ts",
-    "packages/e2e/tests/live/*.ts"
+    "packages/e2e/tests/live/*.ts",
+    "packages/e2e/src/config/register.ts"
   ],
   "ignorePatterns": [
     "docs/**",
@@ -33,7 +34,8 @@
     "@e2e-dev/web",
     "@openrouter/ai-sdk-provider",
     "@expo/fingerprint",
-    "@expo/repack-app"
+    "@expo/repack-app",
+    "@oxc-project/runtime"
   ],
   "rules": {
     "unused-class-member": "warn",

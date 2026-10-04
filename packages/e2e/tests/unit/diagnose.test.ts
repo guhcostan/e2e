@@ -46,20 +46,6 @@ describe('explainModuleError', () => {
     expect(explainModuleError(cause, importer)).toBe(cause.message);
   });
 
-  it('says an existing CommonJS-scoped TypeScript file the loader could not transform is there, and why it failed', () => {
-    const pkg = path.join(dir, 'node_modules', 'dep');
-    mkdirSync(path.join(pkg, 'src'), { recursive: true });
-    writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'dep' }));
-    const file = path.join(pkg, 'src', 'a.ts');
-    writeFileSync(file, 'export const v = 1;');
-    const cause = nodeError('MODULE_NOT_FOUND', `Cannot find module '${file}?namespace=e2e'\nRequire stack:\n- ${importer}`);
-    expect(explainModuleError(cause, importer)).toContain(
-      `\n${file} exists: ${path.join(pkg, 'package.json')} declares no "type": "module", so the file loads as CommonJS`,
-    );
-    const gone = nodeError('MODULE_NOT_FOUND', `Cannot find module '${path.join(pkg, 'src', 'b.ts')}?namespace=e2e'`);
-    expect(explainModuleError(gone, importer)).toBe(gone.message);
-  });
-
   it('lists the subpaths a package exports and suggests the closest one', () => {
     const manifestDir = path.join(dir, 'node_modules', 'e2e');
     mkdirSync(manifestDir, { recursive: true });
@@ -90,6 +76,14 @@ describe('explainModuleError', () => {
     expect(explainModuleError(missing('somethingElse'), importer)).toContain('e2e exports test, describe, beforeEach, afterEach, beforeAll, afterAll, expect');
     const other = new SyntaxError("The requested module 'lodash' does not provide an export named 'nope'");
     expect(explainModuleError(other, importer)).toBe(other.message);
+  });
+
+  it('names the importing line and the import type fix for a type imported as a value', () => {
+    const cause = new SyntaxError("The requested module './types' does not provide an export named 'Options'");
+    cause.stack = `${path.join(dir, 'svc.ts')}:1\nimport { Options } from './types';\n         ^\nSyntaxError: ${cause.message}`;
+    expect(explainModuleError(cause, importer)).toBe(
+      `The requested module './types' does not provide an export named 'Options' (${path.join(dir, 'svc.ts')}:1); if Options is a type (an interface or a type alias), import it with import type { Options }: e2e compiles each file on its own, without type information, so an import of a type has to say so, as under TypeScript's isolatedModules; with emitDecoratorMetadata, the same holds for a type a decorated member's annotation names`,
+    );
   });
 
   it('names the removal for a dropped export without a release number, never the type-only import that fails the same way', () => {

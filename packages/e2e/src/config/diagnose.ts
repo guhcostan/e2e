@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { withHint } from '../internal/errors.ts';
 import { addDevDependencyCommand, detectPackageManager } from '../internal/package-manager.ts';
 import { didYouMean, suggest } from '../internal/suggest.ts';
@@ -55,18 +56,6 @@ const REMOVED_EXPORTS: Readonly<Record<string, Readonly<Record<string, string>>>
   },
 };
 
-/**
- * The hint for TypeScript an installed package ships under a CommonJS scope:
- * the file is there, but it loads through `require`, which the TypeScript
- * loader does not hook, so Node reports it missing under the loader's query.
- */
-function commonJsTypeScriptHint(file: string): string {
-  let dir = path.dirname(file);
-  while (!existsSync(path.join(dir, 'package.json')) && path.dirname(dir) !== dir) dir = path.dirname(dir);
-  const manifest = path.join(dir, 'package.json');
-  return `${file} exists: ${manifest} declares no "type": "module", so the file loads as CommonJS, which e2e's TypeScript loader does not transform; import the package's compiled JavaScript, or have the package declare "type": "module"`;
-}
-
 interface Manifest {
   readonly path: string;
   readonly dir: string;
@@ -81,14 +70,23 @@ interface Manifest {
  */
 export function explainModuleError(cause: unknown, importer: string): string {
   const message = cause instanceof Error ? cause.message : String(cause);
-  return withHint(message, moduleErrorHint(message, (cause as { code?: unknown } | null)?.code, importer));
+  return withHint(`${message}${syntaxErrorLocation(cause, message)}`, moduleErrorHint(message, (cause as { code?: unknown } | null)?.code, importer));
+}
+
+/**
+ * ` (file:line)` for a SyntaxError Node.js raised linking or parsing a
+ * module, which names the line only in the first line of its stack, not in
+ * its message; empty for any other error.
+ */
+function syntaxErrorLocation(cause: unknown, message: string): string {
+  if (!(cause instanceof SyntaxError)) return '';
+  const located = /^(.+?):(\d+)\n/.exec(cause.stack ?? '');
+  if (located === null || message.includes(located[1]!)) return '';
+  const file = located[1]!.startsWith('file:') ? fileURLToPath(located[1]!) : located[1]!;
+  return ` (${file}:${located[2]})`;
 }
 
 function moduleErrorHint(message: string, code: unknown, importer: string): string {
-  if (code === 'MODULE_NOT_FOUND') {
-    const loaded = /Cannot find module '([^']+)\?namespace=[^']*'/.exec(message)?.[1];
-    return loaded !== undefined && existsSync(loaded) ? commonJsTypeScriptHint(loaded) : '';
-  }
   if (code === 'ERR_MODULE_NOT_FOUND') {
     const missing = /Cannot find (?:package|module) '([^']+)'/.exec(message)?.[1];
     if (missing !== undefined && !missing.startsWith('.') && !path.isAbsolute(missing)) {
@@ -139,7 +137,10 @@ function subpathHint(subpath: string, manifestPath: string): string {
 function missingExportHint(specifier: string, exportName: string): string {
   const removed = REMOVED_EXPORTS[specifier]?.[exportName];
   if (removed !== undefined) return removed;
-  if (specifier !== 'e2e') return '';
+  if (specifier !== 'e2e') {
+    if (!/^[A-Z]/.test(exportName)) return '';
+    return `if ${exportName} is a type (an interface or a type alias), import it with import type { ${exportName} }: e2e compiles each file on its own, without type information, so an import of a type has to say so, as under TypeScript's isolatedModules; with emitDecoratorMetadata, the same holds for a type a decorated member's annotation names`;
+  }
   const suggestion = suggest(exportName, RUNTIME_EXPORTS);
   if (suggestion !== undefined) return `did you mean "${suggestion}"?`;
   return /^[A-Z]/.test(exportName)

@@ -1,28 +1,40 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MINIMUM_NODE_VERSION, unsupportedNodeMessage } from '../../src/internal/node-version.ts';
+import { SUPPORTED_NODE_RANGE, unsupportedRuntimeMessage } from '../../src/internal/node-version.ts';
 
-describe('unsupportedNodeMessage', () => {
-  it('mirrors the engines field of package.json', () => {
-    const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
-      engines: { node: string };
-    };
-    expect(manifest.engines.node).toBe(`>=${MINIMUM_NODE_VERSION}`);
+const unsupportedNodeMessage = (node: string): string | undefined => unsupportedRuntimeMessage({ node }, true);
+
+describe('unsupportedRuntimeMessage', () => {
+  it('mirrors the engines field of every published package', () => {
+    expect(SUPPORTED_NODE_RANGE).toBe('^22.22.3 || >=24.8.0');
+    const packages = new URL('../../../', import.meta.url);
+    for (const dir of readdirSync(packages).filter((name) => existsSync(new URL(`${name}/package.json`, packages)))) {
+      const manifest = JSON.parse(readFileSync(new URL(`${dir}/package.json`, packages), 'utf8')) as { name: string; engines: { node: string } };
+      expect({ name: manifest.name, node: manifest.engines.node }).toEqual({ name: manifest.name, node: SUPPORTED_NODE_RANGE });
+    }
   });
 
-  it('accepts the floor and anything newer', () => {
-    expect(unsupportedNodeMessage('22.12.0')).toBeUndefined();
-    expect(unsupportedNodeMessage('v22.12.1')).toBeUndefined();
-    expect(unsupportedNodeMessage('24.0.0')).toBeUndefined();
-    expect(unsupportedNodeMessage('26.4.0')).toBeUndefined();
+  it.each(['22.22.3', 'v22.23.3', '24.8.0', '24.19.0', '25.0.0', '26.4.0'])('accepts %s', (version) => {
+    expect(unsupportedNodeMessage(version)).toBeUndefined();
   });
 
-  it('names both versions and how to switch for anything older', () => {
-    const message = unsupportedNodeMessage('v18.20.4');
-    expect(message).toContain('requires Node.js 22.12.0 or newer');
-    expect(message).toContain('this is Node.js 18.20.4');
-    expect(message).toContain('nvm use 22');
-    expect(unsupportedNodeMessage('22.11.9')).toBeDefined();
-    expect(unsupportedNodeMessage('20.19.0')).toBeDefined();
+  it.each(['18.20.4', '20.19.0', '22.12.0', '22.22.2', '23.11.1', '24.7.0'])('refuses %s', (version) => {
+    expect(unsupportedNodeMessage(version)).toBeDefined();
+  });
+
+  it('names both floors, the running version, and how to switch', () => {
+    const message = unsupportedNodeMessage('v22.18.0');
+    expect(message).toBe(
+      'e2e requires Node.js 22.22.3 or newer on Node.js 22, or 24.8.0 or newer; this is Node.js 22.18.0. Upgrade Node.js, or switch versions with your version manager (nvm install 24, fnm install 24, volta install node@24).',
+    );
+  });
+
+  it('refuses a runtime that reports a supported Node.js without module.registerHooks, naming Bun', () => {
+    expect(unsupportedRuntimeMessage({ node: '24.19.0', bun: '1.4.2' }, false)).toBe(
+      'e2e runs on Node.js: Bun 1.4.2 reports Node.js 24.19.0 but has no module.registerHooks, which e2e\'s TypeScript loader needs. Run the CLI with Node.js: npx e2e, or bunx e2e (without --bun).',
+    );
+    expect(unsupportedRuntimeMessage({ node: '22.12.0', bun: '1.4.2' }, false)).toContain('Bun 1.4.2 reports Node.js 22.12.0 but has no module.registerHooks');
+    expect(unsupportedRuntimeMessage({ node: '24.19.0' }, true)).toBeUndefined();
+    expect(unsupportedRuntimeMessage({ node: '26.3.0', deno: '2.9.4' }, true)).toBe('e2e runs on Node.js, not Deno 2.9.4: run the CLI with Node.js (npx e2e).');
   });
 });
